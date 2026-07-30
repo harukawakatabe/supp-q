@@ -1,0 +1,25 @@
+.DS_Store
+.env
+.env.*
+!.env.example
+node_modules/
+dist/
+unpackage/
+coverage/
+*.log
+tmp/
+.cache/
+
+# Local databases and object storage
+data/
+postgres-data/
+minio-data/
+
+# Private recognition samples and generated reports
+testdata/recognition/private/
+reports/private/
+
+# Local IDE and runtime files
+.idea/
+.vscode/
+

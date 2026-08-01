@@ -13,8 +13,8 @@
 | OCR/vision | explicit fake or live test provider | live provider only |
 | LLM | explicit fake or live test provider | live provider; core flow remains independent |
 | HTTPS | optional localhost | mandatory |
-| Sessions | local secure-enough settings | Secure, HttpOnly, SameSite cookies and rotation |
-| Data | deterministic seed and fixtures | real user data |
+| Sessions | HttpOnly, SameSite=Lax over local HTTP | Secure, HttpOnly, SameSite=Lax and rotation |
+| Data | isolated identities; supplement cards still preview-only | real user data after domain phases |
 | Logs | console JSON | retained structured logs and alerts |
 | Monitoring | local health output | API, worker, DB, queue, storage, provider metrics |
 | Backup | disposable | scheduled encrypted backup and restore drill |
@@ -56,6 +56,7 @@ Secrets live outside the Git checkout in a root-readable environment file, conta
 - Faster demo expiration in automated tests.
 - Mail capture instead of real delivery.
 - Local HTTP instead of production HTTPS.
+- A committed development-only HMAC pepper instead of a secret-manager value.
 
 ## Behavior differences that are forbidden
 

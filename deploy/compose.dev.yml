@@ -42,6 +42,21 @@ services:
       - "127.0.0.1:8025:8025"
     restart: unless-stopped
 
+  migrate:
+
+    build:
+      context: ../server
+      dockerfile: Dockerfile
+    command: ["/app/suppq-migrate"]
+    environment:
+      SUPPQ_ENV: development
+      SUPPQ_DATABASE_URL: postgres://suppq:suppq_local_only@postgres:5432/suppq?sslmode=disable
+      SUPPQ_TOKEN_PEPPER: suppq-development-pepper-not-for-production
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
   api:
     build:
       context: ../server
@@ -53,8 +68,17 @@ services:
       SUPPQ_ALLOWED_ORIGIN: http://127.0.0.1:3000
       SUPPQ_DATABASE_URL: postgres://suppq:suppq_local_only@postgres:5432/suppq?sslmode=disable
       SUPPQ_DATABASE_TIMEOUT: 3s
+      SUPPQ_TOKEN_PEPPER: suppq-development-pepper-not-for-production
+      SUPPQ_SESSION_TTL: 720h
+      SUPPQ_DEMO_TTL: 24h
+      SUPPQ_EMAIL_CODE_TTL: 10m
+      SUPPQ_SMTP_HOST: mailpit
+      SUPPQ_SMTP_PORT: 1025
+      SUPPQ_SMTP_FROM: 小补Q <no-reply@suppq.local>
     depends_on:
-      postgres:
+      migrate:
+        condition: service_completed_successfully
+      mailpit:
         condition: service_healthy
     ports:
       - "127.0.0.1:8080:8080"
@@ -75,9 +99,13 @@ services:
       SUPPQ_DATABASE_URL: postgres://suppq:suppq_local_only@postgres:5432/suppq?sslmode=disable
       SUPPQ_DATABASE_TIMEOUT: 3s
       SUPPQ_WORKER_INTERVAL: 30s
+      SUPPQ_TOKEN_PEPPER: suppq-development-pepper-not-for-production
+      SUPPQ_SESSION_TTL: 720h
+      SUPPQ_DEMO_TTL: 24h
+      SUPPQ_EMAIL_CODE_TTL: 10m
     depends_on:
-      postgres:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     restart: unless-stopped
 
   h5:

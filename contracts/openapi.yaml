@@ -1,112 +1,208 @@
 openapi: 3.1.0
 info:
   title: Supp Q API
-  version: 0.1.0
-  description: >-
-    Phase 0 operational contract only. Product, identity, invitation, demo,
-    recognition, AI, and reminder APIs are not implemented.
+  version: 0.2.0
+  description: Phase 1 operational, session, authentication, and invitation contract.
 servers:
   - url: /api/v1
 paths:
   /health/live:
     get:
       operationId: getLiveness
-      summary: Confirm that the API process is serving HTTP
       responses:
-        "200":
-          description: The process is live; dependency readiness is not asserted.
-          headers:
-            X-Request-ID:
-              $ref: "#/components/headers/RequestID"
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Liveness"
-        "404":
-          $ref: "#/components/responses/NotFound"
+        "200": { description: Process is live, content: { application/json: { schema: { $ref: "#/components/schemas/Liveness" } } } }
   /health/ready:
     get:
       operationId: getReadiness
-      summary: Confirm that the API can authenticate to PostgreSQL
+      responses:
+        "200": { description: PostgreSQL is ready, content: { application/json: { schema: { $ref: "#/components/schemas/Readiness" } } } }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+  /session:
+    get:
+      operationId: ensureSession
+      summary: Return the active actor or create an isolated expiring demo actor
       responses:
         "200":
-          description: PostgreSQL accepted a ping within the configured timeout.
-          headers:
-            X-Request-ID:
-              $ref: "#/components/headers/RequestID"
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Readiness"
-        "503":
-          description: PostgreSQL is unavailable or timed out.
-          headers:
-            X-Request-ID:
-              $ref: "#/components/headers/RequestID"
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ReadinessDegraded"
+          description: Active session. A new HttpOnly cookie may be issued.
+          headers: { Set-Cookie: { $ref: "#/components/headers/SessionCookie" } }
+          content: { application/json: { schema: { $ref: "#/components/schemas/Session" } } }
+  /auth/email-code/request:
+    post:
+      operationId: requestEmailCode
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/EmailCodeRequest" } } }
+      responses:
+        "202": { $ref: "#/components/responses/Accepted" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "502": { $ref: "#/components/responses/ServiceUnavailable" }
+  /auth/email-code/verify:
+    post:
+      operationId: verifyEmailCode
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/EmailCodeVerify" } } }
+      responses:
+        "200":
+          description: Registered session created; originating demo is queued for deletion.
+          headers: { Set-Cookie: { $ref: "#/components/headers/SessionCookie" } }
+          content: { application/json: { schema: { $ref: "#/components/schemas/Session" } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+  /auth/password/login:
+    post:
+      operationId: passwordLogin
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/PasswordLogin" } } }
+      responses:
+        "200":
+          description: Registered session created.
+          headers: { Set-Cookie: { $ref: "#/components/headers/SessionCookie" } }
+          content: { application/json: { schema: { $ref: "#/components/schemas/Session" } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+  /auth/password-reset/request:
+    post:
+      operationId: requestPasswordReset
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [email], properties: { email: { type: string, format: email } } } } }
+      responses:
+        "202": { $ref: "#/components/responses/Accepted" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+  /auth/password-reset/confirm:
+    post:
+      operationId: confirmPasswordReset
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/PasswordReset" } } }
+      responses:
+        "200": { description: Password changed and all existing sessions invalidated. }
+        "400": { $ref: "#/components/responses/BadRequest" }
+  /auth/logout:
+    post:
+      operationId: logout
+      security: [{ sessionCookie: [] }]
+      responses:
+        "204": { description: Session invalidated and cookie cleared. }
+  /admin/invitations:
+    get:
+      operationId: listInvitations
+      security: [{ sessionCookie: [] }]
+      responses:
+        "200":
+          description: Most recent invitation metadata. Secrets are never returned.
+          content: { application/json: { schema: { type: object, required: [items], properties: { items: { type: array, items: { $ref: "#/components/schemas/Invitation" } } } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      operationId: createInvitation
+      security: [{ sessionCookie: [] }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/CreateInvitation" } } }
+      responses:
+        "201":
+          description: Invitation created. The plaintext secret is returned once.
+          content: { application/json: { schema: { allOf: [{ $ref: "#/components/schemas/Invitation" }, { type: object, required: [secret], properties: { secret: { type: string } } }] } } }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /admin/invitations/{invitationId}:
+    delete:
+      operationId: revokeInvitation
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - { name: invitationId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: Invitation revoked. }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
 components:
+  securitySchemes:
+    sessionCookie: { type: apiKey, in: cookie, name: suppq_session }
   headers:
-    RequestID:
-      description: Opaque request identifier generated by the API.
-      schema:
-        type: string
-        minLength: 1
+    SessionCookie:
+      description: HttpOnly, SameSite=Lax session cookie; Secure in production.
+      schema: { type: string }
   responses:
-    NotFound:
-      description: Route does not exist.
-      headers:
-        X-Request-ID:
-          $ref: "#/components/headers/RequestID"
-      content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/ErrorEnvelope"
+    Accepted: { description: Request accepted, content: { application/json: { schema: { type: object, properties: { status: { const: accepted } } } } } }
+    BadRequest: { description: Invalid request or credentials, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } } }
+    Unauthorized: { description: Session required, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } } }
+    Forbidden: { description: Admin role required, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } } }
+    NotFound: { description: Resource not found, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } } }
+    TooManyRequests: { description: Email challenge rate limit reached, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } } }
+    ServiceUnavailable: { description: Dependency unavailable, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } } }
   schemas:
     HealthBase:
       type: object
       required: [status, service, version, requestId, timestamp]
       properties:
-        status:
-          type: string
-        service:
-          const: suppq-api
-        version:
-          type: string
-        requestId:
-          type: string
-        timestamp:
-          type: string
-          format: date-time
+        status: { type: string }
+        service: { const: suppq-api }
+        version: { type: string }
+        requestId: { type: string }
+        timestamp: { type: string, format: date-time }
     Liveness:
-      allOf:
-        - $ref: "#/components/schemas/HealthBase"
-        - type: object
-          properties:
-            status:
-              const: ok
+      allOf: [{ $ref: "#/components/schemas/HealthBase" }, { type: object, properties: { status: { const: ok } } }]
     Readiness:
-      allOf:
-        - $ref: "#/components/schemas/HealthBase"
-        - type: object
-          required: [database]
-          properties:
-            status:
-              const: ok
-            database:
-              const: ready
-    ReadinessDegraded:
-      allOf:
-        - $ref: "#/components/schemas/HealthBase"
-        - type: object
-          required: [database]
-          properties:
-            status:
-              const: degraded
-            database:
-              const: unavailable
+      allOf: [{ $ref: "#/components/schemas/HealthBase" }, { type: object, required: [database], properties: { status: { const: ok }, database: { const: ready } } }]
+    Actor:
+      type: object
+      required: [userId, kind, role, workspaceId, workspaceKind, workspaceName]
+      properties:
+        userId: { type: string, format: uuid }
+        kind: { enum: [registered, demo_ephemeral] }
+        role: { enum: [member, admin] }
+        email: { type: string, format: email }
+        workspaceId: { type: string, format: uuid }
+        workspaceKind: { enum: [registered, demo] }
+        workspaceName: { type: string }
+        expiresAt: { type: string, format: date-time }
+    Session:
+      type: object
+      required: [actor]
+      properties: { actor: { $ref: "#/components/schemas/Actor" } }
+    EmailCodeRequest:
+      type: object
+      required: [email, invitation]
+      properties:
+        email: { type: string, format: email }
+        invitation: { type: string, description: Required only for a new account. }
+    EmailCodeVerify:
+      type: object
+      required: [email, code, invitation, password]
+      properties:
+        email: { type: string, format: email }
+        code: { type: string, pattern: "^[0-9]{6}$" }
+        invitation: { type: string }
+        password: { type: string, minLength: 0, maxLength: 256, description: Optional; when present it binds password login to the same user. }
+    PasswordLogin:
+      type: object
+      required: [email, password]
+      properties: { email: { type: string, format: email }, password: { type: string, minLength: 1, maxLength: 256 } }
+    PasswordReset:
+      type: object
+      required: [email, code, password]
+      properties: { email: { type: string, format: email }, code: { type: string, pattern: "^[0-9]{6}$" }, password: { type: string, minLength: 10, maxLength: 256 } }
+    CreateInvitation:
+      type: object
+      required: [kind, maxUses, expiresAt]
+      properties:
+        kind: { enum: [generic_code, email_bound] }
+        email: { type: string, format: email, description: Required for email_bound. }
+        maxUses: { type: integer, minimum: 1, maximum: 1000, description: Forced to one for email_bound. }
+        expiresAt: { type: string, format: date-time }
+    Invitation:
+      type: object
+      required: [id, kind, maxUses, useCount, expiresAt, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        kind: { enum: [generic_code, email_bound] }
+        email: { type: string, format: email }
+        maxUses: { type: integer }
+        useCount: { type: integer }
+        expiresAt: { type: string, format: date-time }
+        revokedAt: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time }
     ErrorEnvelope:
       type: object
       required: [error]
@@ -114,10 +210,4 @@ components:
         error:
           type: object
           required: [code, message, requestId]
-          properties:
-            code:
-              type: string
-            message:
-              type: string
-            requestId:
-              type: string
+          properties: { code: { type: string }, message: { type: string }, requestId: { type: string } }

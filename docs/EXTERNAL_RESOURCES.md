@@ -17,7 +17,7 @@ Status values: `not selected`, `selected`, `configured`, `verified`.
 | LLM | fake or live test adapter | server-side provider secret | existing Kimi intended, exact config pending |
 | Monitoring | local logs | selected logging/alert destination | not selected |
 | Backup target | disposable | external bucket or separate backup destination | not selected |
-| Admin identity | seed placeholder | owner-controlled verified email | not provided |
+| Admin identity | local `admin@suppq.local` acceptance user | owner-controlled verified email | local verified; production not provided |
 | Brand clearance | working name | trademark/domain/app-store checks | pending |
 
 ## Required production values

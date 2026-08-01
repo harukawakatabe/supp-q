@@ -2,13 +2,14 @@
 
 ## Current truth
 
-Phase 0 is locally operational and evidence-backed. The H5 shell, Go process
-layout, PostgreSQL readiness, worker heartbeat, local S3 sandbox, Mailpit, and
-Caddy path work together.
+Phase 0 and the Phase 1 identity core are locally operational and
+evidence-backed. The H5 shell, Go process layout, migrations, PostgreSQL,
+isolated demo sessions, invitations, email codes, password login/reset, worker
+cleanup, local S3 sandbox, Mailpit, and Caddy path work together.
 
-Do not inflate that statement. Authentication, invitations, demo identities,
-domain records, recognition, AI, reminders, migrations, browser E2E, backup,
-and production deployment are not implemented. Static Today cards are preview
+Do not inflate that statement. Domain records, seeded demo products,
+recognition, AI, reminders, storage cleanup, automated browser E2E, backup, and
+production deployment are not implemented. Static Today cards are preview
 content, not user data or functioning schedule records.
 
 ## Read first
@@ -23,6 +24,8 @@ content, not user data or functioning schedule records.
 8. `SECURITY.md`
 9. `ACCEPTANCE.md`
 10. `../contracts/openapi.yaml`
+11. `IDENTITY.md`
+12. `ERRORS.md`
 
 ## Start and verify
 
@@ -34,6 +37,13 @@ make status
 curl http://127.0.0.1:3000/api/v1/health/ready
 make test
 make check
+```
+
+For the first local administrator:
+
+```bash
+docker-compose -f deploy/compose.dev.yml exec -T api \
+  /app/suppq-admin bootstrap-admin admin@suppq.local
 ```
 
 Use `make down` to stop containers without deleting the local PostgreSQL and
@@ -60,23 +70,20 @@ into `uni/` with new tests and provenance notes.
 
 ## Next implementation order
 
-### Phase 1: contracts, database, identity
+### Completed Phase 1 core: contracts, database, identity
 
-1. Define the stable error registry and identity/invitation/demo OpenAPI paths.
-2. Choose and add a Go migration tool; create append-only initial migrations.
-3. Implement the shared `invitations` model for generic codes and email-bound
-   invitations.
-4. Implement email verification, password login, email-code login, sessions,
-   logout, and binding multiple auth identities.
-5. Implement isolated seeded `demo_ephemeral` users and 24-hour inactivity
-   cleanup.
-6. On registration/login, create an empty real workspace, invalidate the demo
-   session, and enqueue full demo deletion. Do not migrate or retain demo data.
-7. Add minimal invitation administration without exposing it publicly.
+- Stable errors and OpenAPI identity paths.
+- Embedded Goose migrations.
+- Shared generic and email-bound invitations with atomic claim.
+- Email-code and password identities, reset, session rotation, and logout.
+- Isolated demo identities and 24-hour database cleanup.
+- Empty real workspace on login; originating demo queued for deletion.
+- Role-gated H5 invitation administration and CLI admin bootstrap.
 
-Acceptance: two anonymous browsers never share writes; two registered users
-cannot cross-read; login invalidates and deletes the originating demo; both
-invitation modes use the same persistence model.
+Still required before calling all Phase 1 production-ready: automatic
+invitation-email delivery, IP/proxy abuse controls, automated browser E2E, and
+file cleanup after file persistence exists. Sample demo products move into
+Phase 2 because their domain schema does not exist yet.
 
 ### Phase 2: deterministic core
 
@@ -114,7 +121,7 @@ unconfirmed final plan.
 - Sass legacy API warnings are real debt but do not currently fail builds.
 - Liveness never proves database health; use readiness for PostgreSQL.
 - Worker `jobs: not_implemented` is intentional and must not be presented as a
-  working queue.
+  working domain queue. Demo cleanup is the only active worker job.
 - SeaweedFS is a replaceable local S3 sandbox. Production remains COS or OSS.
 - The CI file becomes active only after `uni/` is a repository root.
 

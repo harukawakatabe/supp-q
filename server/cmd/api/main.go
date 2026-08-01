@@ -13,6 +13,8 @@ import (
 	"suppq.local/server/internal/config"
 	"suppq.local/server/internal/database"
 	"suppq.local/server/internal/httpapi"
+	"suppq.local/server/internal/identity"
+	"suppq.local/server/internal/mailer"
 )
 
 var version = "dev"
@@ -40,6 +42,12 @@ func main() {
 		Database:      database.Checker{Pool: pool, Timeout: cfg.DatabaseTimeout},
 		Logger:        logger,
 		Version:       version,
+		Identity: identity.New(pool, mailer.SMTP{
+			Host: cfg.SMTPHost, Port: cfg.SMTPPort, From: cfg.SMTPFrom,
+			Username: cfg.SMTPUsername, Password: cfg.SMTPPassword,
+		}, identity.Config{Pepper: cfg.TokenPepper, SessionTTL: cfg.SessionTTL, DemoTTL: cfg.DemoTTL, EmailCodeTTL: cfg.EmailCodeTTL}),
+		SessionCookie: cfg.SessionCookie,
+		CookieSecure:  cfg.CookieSecure,
 	})
 
 	server := &http.Server{

@@ -5,14 +5,16 @@ recognition, scheduling, intake, inventory, and reminder service.
 
 ## Current status
 
-Phase 0 is implemented and verified locally: a uni-app H5 shell, Go API,
-separate worker and admin commands, PostgreSQL, private local S3 sandbox,
-Mailpit, Caddy, pinned containers, tests, and build commands run together.
+Phase 0 and the Phase 1 identity core are implemented and verified locally: a
+uni-app H5 shell, Go API, worker, migrations, PostgreSQL, isolated demo users,
+shared invitations, email-code and password authentication, invitation admin,
+Mailpit, private local S3 sandbox, and Caddy run together.
 
-No production product feature is shipped yet. Authentication, invitations,
-isolated demo identities, product records, schedules, inventory, intake,
-recognition, AI, reminders, migrations, and production deployment remain
-unimplemented. The Today content is visibly labelled preview data.
+Nothing is deployed to production. Product records, seeded demo products,
+schedules, inventory, intake, recognition, AI, reminders, storage cleanup,
+production email, automated browser E2E, backups, and production deployment
+remain unimplemented. The Today supplement cards are visibly labelled preview
+data.
 
 ## Start locally
 
@@ -41,6 +43,8 @@ the corresponding lifecycle steps. `Makefile` supports both the standard
 - `docs/DEVELOPMENT_VS_PRODUCTION.md` — local and production differences
 - `docs/EXTERNAL_RESOURCES.md` — resources the owner must prepare
 - `docs/HANDOFF.md` — next-agent entry point
+- `docs/IDENTITY.md` — implemented identity flows and remaining gaps
+- `docs/ERRORS.md` — stable error registry
 - `contracts/openapi.yaml` — implemented HTTP contract only
 
 ## Independence rule

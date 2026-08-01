@@ -1,6 +1,16 @@
 .git
 .env*
+.cache
+.github
 app/node_modules
 app/dist
+contracts
+docs
+seed
+server
 server/bin
 *.log
+README.md
+PRD.md
+AGENTS.md
+Makefile

@@ -17,6 +17,17 @@ type Config struct {
 	DatabaseTimeout time.Duration
 	ShutdownTimeout time.Duration
 	WorkerInterval  time.Duration
+	TokenPepper     string
+	SessionCookie   string
+	SessionTTL      time.Duration
+	DemoTTL         time.Duration
+	EmailCodeTTL    time.Duration
+	CookieSecure    bool
+	SMTPHost        string
+	SMTPPort        string
+	SMTPFrom        string
+	SMTPUsername    string
+	SMTPPassword    string
 }
 
 func FromEnv() (Config, error) {
@@ -25,6 +36,13 @@ func FromEnv() (Config, error) {
 		HTTPAddr:      envOr("SUPPQ_HTTP_ADDR", "127.0.0.1:8080"),
 		AllowedOrigin: envOr("SUPPQ_ALLOWED_ORIGIN", "http://127.0.0.1:5173"),
 		DatabaseURL:   os.Getenv("SUPPQ_DATABASE_URL"),
+		TokenPepper:   envOr("SUPPQ_TOKEN_PEPPER", "suppq-development-pepper-not-for-production"),
+		SessionCookie: envOr("SUPPQ_SESSION_COOKIE", "suppq_session"),
+		SMTPHost:      envOr("SUPPQ_SMTP_HOST", "127.0.0.1"),
+		SMTPPort:      envOr("SUPPQ_SMTP_PORT", "1025"),
+		SMTPFrom:      envOr("SUPPQ_SMTP_FROM", "小补Q <no-reply@suppq.local>"),
+		SMTPUsername:  strings.TrimSpace(os.Getenv("SUPPQ_SMTP_USERNAME")),
+		SMTPPassword:  os.Getenv("SUPPQ_SMTP_PASSWORD"),
 	}
 
 	var err error
@@ -37,11 +55,27 @@ func FromEnv() (Config, error) {
 	if cfg.WorkerInterval, err = durationOr("SUPPQ_WORKER_INTERVAL", 30*time.Second); err != nil {
 		return Config{}, err
 	}
+	if cfg.SessionTTL, err = durationOr("SUPPQ_SESSION_TTL", 30*24*time.Hour); err != nil {
+		return Config{}, err
+	}
+	if cfg.DemoTTL, err = durationOr("SUPPQ_DEMO_TTL", 24*time.Hour); err != nil {
+		return Config{}, err
+	}
+	if cfg.EmailCodeTTL, err = durationOr("SUPPQ_EMAIL_CODE_TTL", 10*time.Minute); err != nil {
+		return Config{}, err
+	}
 
 	if strings.TrimSpace(cfg.DatabaseURL) == "" {
 		return Config{}, errors.New("SUPPQ_DATABASE_URL is required")
 	}
 	if cfg.Environment == "production" {
+		cfg.CookieSecure = true
+		if len(cfg.TokenPepper) < 32 || cfg.TokenPepper == "suppq-development-pepper-not-for-production" {
+			return Config{}, errors.New("SUPPQ_TOKEN_PEPPER must be a production secret of at least 32 characters")
+		}
+		if strings.TrimSpace(os.Getenv("SUPPQ_SMTP_HOST")) == "" || strings.TrimSpace(os.Getenv("SUPPQ_SMTP_FROM")) == "" {
+			return Config{}, errors.New("SUPPQ_SMTP_HOST and SUPPQ_SMTP_FROM are required in production")
+		}
 		parsed, parseErr := url.Parse(cfg.DatabaseURL)
 		if parseErr != nil {
 			return Config{}, fmt.Errorf("SUPPQ_DATABASE_URL is invalid: %w", parseErr)

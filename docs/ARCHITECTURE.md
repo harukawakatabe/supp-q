@@ -165,12 +165,19 @@ static H5 delivery, and API reverse proxy. PostgreSQL remains the durable source
 of truth; production objects live in private Tencent COS or Alibaba OSS; backup
 artifacts live outside the application server.
 
-The locally implemented API surface is deliberately narrow:
+The locally implemented API surface now includes operations and Phase 1
+identity:
 
 ```text
 GET /api/v1/health/live  → process liveness only
 GET /api/v1/health/ready → authenticated PostgreSQL ping
+GET /api/v1/session      → resume session or create isolated demo
+POST /api/v1/auth/*      → email code, password, reset, logout
+GET|POST|DELETE /api/v1/admin/invitations/*
 ```
 
-The worker currently proves process separation and database connectivity only.
-It does not poll or execute jobs yet.
+The worker now deletes due database-backed demo identities and their cascaded
+rows. It does not execute product, recognition, AI, file, or reminder jobs yet.
+
+Identity details and the remaining security gaps are recorded in
+`docs/IDENTITY.md`; stable errors are in `docs/ERRORS.md`.

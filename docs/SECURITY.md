@@ -8,6 +8,11 @@
 - Registered sessions use HttpOnly, Secure, SameSite cookies in production.
 - Session rotation occurs at login and privilege changes.
 - Generic invitations enforce configured use and expiry limits atomically.
+- Phase 1 implementation uses purpose-separated HMAC-SHA256 digests for
+  sessions, invitations, and email codes; passwords use Argon2id.
+- Password reset invalidates all registered sessions.
+- Current application throttling is per email. Production still needs
+  reverse-proxy/IP limits and abuse monitoring.
 
 ## Demo
 
@@ -56,4 +61,3 @@
 - Health checks separate API, database, worker, storage, and provider configuration.
 - Backups are encrypted and restored in a drill.
 - Production secrets remain outside Git and source directories.
-

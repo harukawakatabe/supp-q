@@ -5,9 +5,14 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"io"
 	"log/slog"
+	"mime"
 	"net/http"
 	"time"
+
+	"suppq.local/server/internal/identity"
 )
 
 type DatabaseChecker interface {
@@ -19,6 +24,9 @@ type Dependencies struct {
 	Database      DatabaseChecker
 	Logger        *slog.Logger
 	Version       string
+	Identity      *identity.Service
+	SessionCookie string
+	CookieSecure  bool
 }
 
 type healthResponse struct {
@@ -67,6 +75,9 @@ func New(deps Dependencies) http.Handler {
 			RequestID: requestID(r.Context()), Timestamp: time.Now().UTC().Format(time.RFC3339), Database: "ready",
 		})
 	})
+	if deps.Identity != nil {
+		registerIdentityRoutes(mux, deps)
+	}
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		response := errorResponse{}
 		response.Error.Code = "route_not_found"
@@ -76,6 +87,228 @@ func New(deps Dependencies) http.Handler {
 	})
 
 	return requestIDMiddleware(loggingMiddleware(deps.Logger, corsMiddleware(deps.AllowedOrigin, mux)))
+}
+
+func registerIdentityRoutes(mux *http.ServeMux, deps Dependencies) {
+	mux.HandleFunc("GET /api/v1/session", func(w http.ResponseWriter, r *http.Request) {
+		result, err := deps.Identity.EnsureSession(r.Context(), sessionToken(r, deps.SessionCookie))
+		if err != nil {
+			writeApplicationError(w, r, deps.Logger, err)
+			return
+		}
+		if result.Fresh {
+			setSessionCookie(w, deps, result.Token)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"actor": result.Actor})
+	})
+	mux.HandleFunc("POST /api/v1/auth/email-code/request", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Email      string `json:"email"`
+			Invitation string `json:"invitation"`
+		}
+		if err := readJSON(r, &body); err != nil {
+			writeApplicationError(w, r, deps.Logger, err)
+			return
+		}
+		if err := deps.Identity.RequestLoginCode(r.Context(), body.Email, body.Invitation); err != nil {
+			writeApplicationError(w, r, deps.Logger, err)
+			return
+		}
+		writeJSON(w, http.StatusAccepted, map[string]string{"status": "accepted"})
+	})
+	mux.HandleFunc("POST /api/v1/auth/email-code/verify", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Email      string `json:"email"`
+			Code       string `json:"code"`
+			Invitation string `json:"invitation"`
+			Password   string `json:"password"`
+		}
+		if err := readJSON(r, &body); err != nil {
+			writeApplicationError(w, r, deps.Logger, err)
+			return
+		}
+		result, err := deps.Identity.VerifyLoginCode(r.Context(), body.Email, body.Code, body.Invitation, body.Password, sessionToken(r, deps.SessionCookie))
+		if err != nil {
+			writeApplicationError(w, r, deps.Logger, err)
+			return
+		}
+		setSessionCookie(w, deps, result.Token)
+		writeJSON(w, http.StatusOK, map[string]any{"actor": result.Actor})
+	})
+	mux.HandleFunc("POST /api/v1/auth/password/login", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Email    string `json:"email"`
+			Password string `json:"password"`
+		}
+		if err := readJSON(r, &body); err != nil {
+			writeApplicationError(w, r, deps.Logger, err)
+			return
+		}
+		result, err := deps.Identity.PasswordLogin(r.Context(), body.Email, body.Password, sessionToken(r, deps.SessionCookie))
+		if err != nil {
+			writeApplicationError(w, r, deps.Logger, err)
+			return
+		}
+		setSessionCookie(w, deps, result.Token)
+		writeJSON(w, http.StatusOK, map[string]any{"actor": result.Actor})
+	})
+	mux.HandleFunc("POST /api/v1/auth/password-reset/request", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Email string `json:"email"`
+		}
+		if err := readJSON(r, &body); err != nil {
+			writeApplicationError(w, r, deps.Logger, err)
+			return
+		}
+		if err := deps.Identity.RequestPasswordReset(r.Context(), body.Email); err != nil {
+			writeApplicationError(w, r, deps.Logger, err)
+			return
+		}
+		writeJSON(w, http.StatusAccepted, map[string]string{"status": "accepted"})
+	})
+	mux.HandleFunc("POST /api/v1/auth/password-reset/confirm", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Email    string `json:"email"`
+			Code     string `json:"code"`
+			Password string `json:"password"`
+		}
+		if err := readJSON(r, &body); err != nil {
+			writeApplicationError(w, r, deps.Logger, err)
+			return
+		}
+		if err := deps.Identity.ConfirmPasswordReset(r.Context(), body.Email, body.Code, body.Password); err != nil {
+			writeApplicationError(w, r, deps.Logger, err)
+			return
+		}
+		clearSessionCookie(w, deps)
+		writeJSON(w, http.StatusOK, map[string]string{"status": "password_reset"})
+	})
+	mux.HandleFunc("POST /api/v1/auth/logout", func(w http.ResponseWriter, r *http.Request) {
+		if err := deps.Identity.Logout(r.Context(), sessionToken(r, deps.SessionCookie)); err != nil {
+			writeApplicationError(w, r, deps.Logger, err)
+			return
+		}
+		clearSessionCookie(w, deps)
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("GET /api/v1/admin/invitations", func(w http.ResponseWriter, r *http.Request) {
+		actor, err := deps.Identity.ActorForToken(r.Context(), sessionToken(r, deps.SessionCookie), true)
+		if err != nil {
+			writeApplicationError(w, r, deps.Logger, err)
+			return
+		}
+		items, err := deps.Identity.ListInvitations(r.Context(), actor)
+		if err != nil {
+			writeApplicationError(w, r, deps.Logger, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"items": items})
+	})
+	mux.HandleFunc("POST /api/v1/admin/invitations", func(w http.ResponseWriter, r *http.Request) {
+		actor, err := deps.Identity.ActorForToken(r.Context(), sessionToken(r, deps.SessionCookie), true)
+		if err != nil {
+			writeApplicationError(w, r, deps.Logger, err)
+			return
+		}
+		var body identity.CreateInvitationInput
+		if err = readJSON(r, &body); err != nil {
+			writeApplicationError(w, r, deps.Logger, err)
+			return
+		}
+		created, err := deps.Identity.CreateInvitation(r.Context(), actor, body)
+		if err != nil {
+			writeApplicationError(w, r, deps.Logger, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, created)
+	})
+	mux.HandleFunc("DELETE /api/v1/admin/invitations/{id}", func(w http.ResponseWriter, r *http.Request) {
+		actor, err := deps.Identity.ActorForToken(r.Context(), sessionToken(r, deps.SessionCookie), true)
+		if err != nil {
+			writeApplicationError(w, r, deps.Logger, err)
+			return
+		}
+		if err = deps.Identity.RevokeInvitation(r.Context(), actor, r.PathValue("id")); err != nil {
+			writeApplicationError(w, r, deps.Logger, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+}
+
+func readJSON(r *http.Request, target any) error {
+	contentType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil || contentType != "application/json" {
+		return identity.NewError("invalid_content_type", "请求必须使用 application/json。")
+	}
+	decoder := json.NewDecoder(io.LimitReader(r.Body, 64<<10))
+	decoder.DisallowUnknownFields()
+	if err = decoder.Decode(target); err != nil {
+		return identity.NewError("invalid_json", "请求内容格式无效。")
+	}
+	if err = decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return identity.NewError("invalid_json", "请求只能包含一个 JSON 对象。")
+	}
+	return nil
+}
+
+func sessionToken(r *http.Request, name string) string {
+	if name == "" {
+		name = "suppq_session"
+	}
+	cookie, err := r.Cookie(name)
+	if err != nil {
+		return ""
+	}
+	return cookie.Value
+}
+
+func setSessionCookie(w http.ResponseWriter, deps Dependencies, token string) {
+	name := deps.SessionCookie
+	if name == "" {
+		name = "suppq_session"
+	}
+	http.SetCookie(w, &http.Cookie{Name: name, Value: token, Path: "/", HttpOnly: true, Secure: deps.CookieSecure, SameSite: http.SameSiteLaxMode, MaxAge: 30 * 24 * 60 * 60})
+}
+func clearSessionCookie(w http.ResponseWriter, deps Dependencies) {
+	name := deps.SessionCookie
+	if name == "" {
+		name = "suppq_session"
+	}
+	http.SetCookie(w, &http.Cookie{Name: name, Value: "", Path: "/", HttpOnly: true, Secure: deps.CookieSecure, SameSite: http.SameSiteLaxMode, MaxAge: -1})
+}
+
+func writeApplicationError(w http.ResponseWriter, r *http.Request, logger *slog.Logger, err error) {
+	status := http.StatusInternalServerError
+	code := "internal_error"
+	message := "服务暂时不可用。"
+	var appErr *identity.Error
+	if errors.As(err, &appErr) {
+		code = appErr.Code
+		message = appErr.Message
+		switch code {
+		case "unauthorized":
+			status = http.StatusUnauthorized
+		case "forbidden":
+			status = http.StatusForbidden
+		case "rate_limited":
+			status = http.StatusTooManyRequests
+		case "invitation_required", "invitation_invalid", "invalid_credentials", "invalid_email", "invalid_password", "invalid_json", "invalid_content_type", "invalid_invitation_kind", "invalid_expiration", "invalid_max_uses":
+			status = http.StatusBadRequest
+		case "invitation_not_found":
+			status = http.StatusNotFound
+		case "email_delivery_failed":
+			status = http.StatusBadGateway
+		}
+	}
+	if status >= 500 {
+		logger.Error("application request failed", "request_id", requestID(r.Context()), "error", err)
+	}
+	response := errorResponse{}
+	response.Error.Code = code
+	response.Error.Message = message
+	response.Error.RequestID = requestID(r.Context())
+	writeJSON(w, status, response)
 }
 
 func requestIDMiddleware(next http.Handler) http.Handler {

@@ -24,6 +24,18 @@ Nothing in `uni/` is deployed or serving real users yet.
 - Local S3 credentials and pre-created private `suppq-uploads` bucket.
 - Multi-stage non-root Go container and build-tested H5 container.
 - Make targets, tool versions, environment examples, and standalone CI file.
+- Goose 3.27.1 embedded, append-only identity migration and a migration gate
+  that completes before API and worker startup.
+- Isolated PostgreSQL-backed `demo_ephemeral` users, workspaces, HttpOnly
+  sessions, 24-hour rolling inactivity expiry, and worker cleanup.
+- Shared generic-code/email-bound invitation lifecycle with expiry, maximum
+  use, single-use email binding, revocation, acceptance rows, and atomic claim.
+- Email verification-code login through SMTP/Mailpit, Argon2id password login,
+  password reset with all-session invalidation, logout, and two email auth
+  identities bound to the same user.
+- Minimal H5 authentication and invitation-administration pages. Invitation
+  secrets are returned only once; the initial admin is bootstrapped by CLI.
+- Stable Phase 1 error registry and OpenAPI 0.2 identity contract.
 
 ## Acceptance evidence on 2026-08-01
 
@@ -48,17 +60,27 @@ Nothing in `uni/` is deployed or serving real users yet.
 - Browser check at 390x844 confirms API connected, zero horizontal overflow,
   fixed bottom navigation, and no clipped cards. Desktop 1280px breakpoint has
   fixed sidebar navigation and zero horizontal overflow.
+- Identity integration test creates its own PostgreSQL schema and passes demo
+  isolation, generic/email-bound invitations, concurrent one-use claim,
+  email-code plus password login, password reset, session invalidation, and
+  demo cleanup.
+- Live Mailpit delivery received six-digit codes; a real generic invitation was
+  claimed, use count advanced atomically, and the same user re-entered with a
+  password in a separate cookie session.
+- Live email-bound request returned 400 for the wrong email and 202 for the
+  bound email.
+- Real H5 browser at 390x844 completed demo → password login → registered empty
+  workspace → logout → new isolated demo. Admin login exposed the invitation
+  page with both created invitations and no horizontal overflow.
 
 ## In progress
 
-- Closing Phase 0 documentation and handoff.
-- Preparing Phase 1 identity, invitation, and demo contracts.
+- Closing Phase 1 identity documentation and repeatable acceptance commands.
+- Preparing Phase 2 deterministic product, schedule, inventory, and intake
+  schema without weakening user/workspace authorization boundaries.
 
 ## Not started
 
-- Domain database schema and migrations.
-- Authentication and shared invitation model.
-- Isolated anonymous demo lifecycle and 24-hour cleanup.
 - Product, schedule, inventory, and intake domains.
 - Upload and recognition job implementation.
 - OCR/vision and Kimi live/fake provider adapters.
@@ -66,6 +88,11 @@ Nothing in `uni/` is deployed or serving real users yet.
 - Application reminders.
 - Domain authorization, integration, and browser E2E suites.
 - Production deployment, backup, restore, monitoring, and alerting.
+- Automatic delivery of email-bound invitation links through the selected
+  production email provider.
+- Reverse-proxy/IP abuse limits and automated browser E2E for identity paths.
+- Demo sample products and records; the identity is seeded only after Phase 2
+  domain tables exist.
 
 ## Deferred after V1
 
@@ -89,3 +116,7 @@ Nothing in `uni/` is deployed or serving real users yet.
 - The first Colima 0.10.3 VM on this machine produced a broken
   `/etc/resolv.conf` symlink. The VM's own resolver backup restored Docker Hub
   access. This was a local environment defect, not an application defect.
+- `net/smtp` negotiates STARTTLS when the server offers it, but production SMTP
+  provider credentials and delivery behavior are not configured or accepted.
+- Database demo cleanup is implemented. Storage-object cleanup cannot be wired
+  until Phase 3 creates file records and an object-storage adapter.

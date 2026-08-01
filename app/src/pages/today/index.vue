@@ -1,10 +1,15 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
-import { getServiceHealth } from "@/services/api";
+import { getServiceHealth, getSession, logout, type Actor } from "@/services/api";
 
 type HealthState = "checking" | "online" | "offline";
 
 const healthState = ref<HealthState>("checking");
+const actor = ref<Actor | null>(null);
+const sessionError = ref("");
+const today = new Date();
+const weekdayLabels = ["星期日", "星期一", "星期二", "星期三", "星期四", "星期五", "星期六"];
+const dateLabel = `${today.getMonth() + 1}月${today.getDate()}日 · ${weekdayLabels[today.getDay()]}`;
 const healthLabel = computed(() => {
   if (healthState.value === "online") return "本地 API 已连接";
   if (healthState.value === "offline") return "本地 API 未连接";
@@ -12,13 +17,22 @@ const healthLabel = computed(() => {
 });
 
 onMounted(async () => {
-  try {
-    await getServiceHealth();
-    healthState.value = "online";
-  } catch {
-    healthState.value = "offline";
-  }
+	const [healthResult, sessionResult] = await Promise.allSettled([getServiceHealth(), getSession()]);
+	healthState.value = healthResult.status === "fulfilled" ? "online" : "offline";
+	if (sessionResult.status === "fulfilled") actor.value = sessionResult.value;
+	else sessionError.value = "无法建立演示空间，请检查本地服务。";
 });
+
+function openAuth() { uni.navigateTo({ url: "/pages/auth/index" }); }
+function openAdmin() { uni.navigateTo({ url: "/pages/admin/invitations" }); }
+async function signOut() {
+	try {
+		await logout();
+		actor.value = await getSession();
+	} catch {
+		sessionError.value = "退出失败，请稍后再试。";
+	}
+}
 </script>
 
 <template>
@@ -29,12 +43,12 @@ onMounted(async () => {
         <text class="brand-name">小补Q</text>
         <text class="brand-en">SUPP Q</text>
       </view>
-      <button class="profile-button" aria-label="个人中心">演</button>
+      <button class="profile-button" aria-label="账户" @click="openAuth">{{ actor?.kind === "registered" ? "我" : "演" }}</button>
     </view>
 
     <main class="content">
       <view class="eyebrow-row">
-        <text class="eyebrow">8月1日 · 星期六</text>
+        <text class="eyebrow">{{ dateLabel }}</text>
         <view class="health-pill" :class="`health-pill--${healthState}`">
           <view class="health-dot" />
           <text>{{ healthLabel }}</text>
@@ -46,9 +60,22 @@ onMounted(async () => {
         <text class="subtitle">先把今天需要确认的事处理完。</text>
       </view>
 
+      <view v-if="actor" class="account-strip">
+        <view class="account-main">
+          <text class="account-title">{{ actor.kind === "demo_ephemeral" ? "独立演示空间" : actor.email }}</text>
+          <text class="account-meta">{{ actor.kind === "demo_ephemeral" ? "24 小时无活动后自动删除，演示修改不会迁移" : "真实空间 · 数据不会与演示空间混合" }}</text>
+        </view>
+        <button v-if="actor.kind === 'demo_ephemeral'" class="text-button" @click="openAuth">登录 / 接受邀请</button>
+        <button v-else class="text-button" @click="signOut">退出</button>
+      </view>
+      <view v-if="actor?.role === 'admin'" class="admin-entry" @click="openAdmin">
+        <text>邀请管理</text><text>创建、查看和撤销邀请 ›</text>
+      </view>
+      <view v-if="sessionError" class="notice notice--error"><text class="notice-body">{{ sessionError }}</text></view>
+
       <view class="notice">
-        <text class="notice-title">Phase 0 预览</text>
-        <text class="notice-body">下方内容仅用于确认信息层级和视觉，不是已实现的真实用药计划。</text>
+        <text class="notice-title">Phase 1 身份闭环</text>
+        <text class="notice-body">账户与空间已连接真实数据库；下方补剂卡片仍是视觉预览，不是已实现的服用计划。</text>
       </view>
 
       <section class="section-block">
@@ -151,8 +178,15 @@ onMounted(async () => {
 .title { font-family: Georgia, "Songti SC", serif; font-size: 68rpx; font-weight: 500; letter-spacing: -2rpx; }
 .subtitle { margin-top: 10rpx; color: #77736b; font-size: 25rpx; }
 .notice { display: flex; flex-direction: column; gap: 9rpx; margin-bottom: 44rpx; padding: 24rpx 26rpx; border: 1rpx solid #ded8ce; border-radius: 18rpx; background: rgba(255, 254, 250, 0.78); }
+.notice--error { border-color: #e4c3bc; background: #fbf1ef; }
 .notice-title { color: #5f5a52; font-size: 22rpx; font-weight: 650; }
 .notice-body { color: #817c74; font-size: 21rpx; line-height: 1.55; }
+.account-strip { display: flex; align-items: center; gap: 20rpx; margin-bottom: 20rpx; padding: 24rpx 26rpx; border: 1rpx solid #d9ded8; border-radius: 18rpx; background: #f0f4ef; }
+.account-main { display: flex; flex: 1; flex-direction: column; gap: 6rpx; min-width: 0; }
+.account-title { overflow: hidden; color: #3f5e4b; font-size: 23rpx; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+.account-meta { color: #6f7c72; font-size: 19rpx; line-height: 1.45; }
+.text-button { flex: 0 0 auto; margin: 0; padding: 10rpx 16rpx; border-radius: 12rpx; background: transparent; color: #3f6a52; font-size: 20rpx; line-height: 1.3; }
+.admin-entry { display: flex; justify-content: space-between; margin-bottom: 20rpx; padding: 22rpx 26rpx; border: 1rpx solid #ddd8d0; border-radius: 18rpx; background: #fffefa; color: #655f56; font-size: 21rpx; }
 .section-block { margin-bottom: 44rpx; }
 .section-heading { display: flex; align-items: flex-end; justify-content: space-between; margin-bottom: 18rpx; padding: 0 4rpx; }
 .section-heading > view { display: flex; flex-direction: column; gap: 6rpx; }

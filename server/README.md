@@ -1,13 +1,15 @@
 # Supp Q server
 
-One Go module with three independently runnable commands:
+One Go module with four independently runnable commands:
 
 - `cmd/api` — HTTP API
 - `cmd/worker` — background worker process
 - `cmd/admin` — explicit administration commands
+- `cmd/migrate` — embedded append-only Goose migrations
 
-The Phase 0 API exposes only operational endpoints. Domain, authentication,
-invitation, demo, recognition, and AI routes are not implemented yet.
+The API exposes operational endpoints plus the Phase 1 session,
+authentication, password reset, and invitation administration contract. Domain,
+recognition, and AI routes are not implemented yet.
 
 ## Commands
 
@@ -17,6 +19,7 @@ go test ./...
 go run ./cmd/api
 go run ./cmd/worker
 go run ./cmd/admin status
+go run ./cmd/migrate
 ```
 
 Environment variables are read from the process. The Go programs deliberately
@@ -31,3 +34,7 @@ the values in your shell.
 
 Every response includes `X-Request-ID`. A caller-supplied request ID is not
 trusted or reflected; the server generates its own identifier.
+
+See `../docs/IDENTITY.md` for the local administrator bootstrap and end-to-end
+identity flow. Set `SUPPQ_TEST_DATABASE_URL` to a disposable PostgreSQL database
+to run the temporary-schema integration test instead of skipping it.

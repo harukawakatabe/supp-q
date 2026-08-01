@@ -8,11 +8,12 @@ import (
 
 	"suppq.local/server/internal/config"
 	"suppq.local/server/internal/database"
+	"suppq.local/server/internal/identity"
 )
 
 func main() {
-	if len(os.Args) != 2 || os.Args[1] != "status" {
-		fmt.Fprintln(os.Stderr, "usage: suppq-admin status")
+	if len(os.Args) < 2 {
+		fmt.Fprintln(os.Stderr, "usage: suppq-admin status | bootstrap-admin <email>")
 		os.Exit(2)
 	}
 
@@ -28,6 +29,22 @@ func main() {
 	}
 	defer pool.Close()
 
+	if os.Args[1] == "bootstrap-admin" {
+		if len(os.Args) != 3 {
+			fmt.Fprintln(os.Stderr, "usage: suppq-admin bootstrap-admin <email>")
+			os.Exit(2)
+		}
+		service := identity.New(pool, nil, identity.Config{Pepper: cfg.TokenPepper, SessionTTL: cfg.SessionTTL, DemoTTL: cfg.DemoTTL, EmailCodeTTL: cfg.EmailCodeTTL})
+		if err := service.BootstrapAdmin(ctx, os.Args[2]); err != nil {
+			fail("bootstrap_admin_failed", err)
+		}
+		_ = json.NewEncoder(os.Stdout).Encode(map[string]string{"status": "ok", "email": os.Args[2], "role": "admin"})
+		return
+	}
+	if os.Args[1] != "status" || len(os.Args) != 2 {
+		fmt.Fprintln(os.Stderr, "usage: suppq-admin status | bootstrap-admin <email>")
+		os.Exit(2)
+	}
 	checker := database.Checker{Pool: pool, Timeout: cfg.DatabaseTimeout}
 	if err := checker.Ping(ctx); err != nil {
 		fail("database_unavailable", err)

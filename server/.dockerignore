@@ -1,5 +1,11 @@
 .git
 .env*
+.cache
 bin
 coverage.out
 *.log
+api
+admin
+worker
+migrate
+*.test

@@ -6,6 +6,20 @@
         "navigationStyle": "custom",
         "navigationBarTitleText": "今日"
       }
+    },
+    {
+      "path": "pages/auth/index",
+      "style": {
+        "navigationStyle": "custom",
+        "navigationBarTitleText": "登录"
+      }
+    },
+    {
+      "path": "pages/admin/invitations",
+      "style": {
+        "navigationStyle": "custom",
+        "navigationBarTitleText": "邀请管理"
+      }
     }
   ],
   "globalStyle": {

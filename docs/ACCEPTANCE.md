@@ -38,6 +38,30 @@ anonymous demo
 - restart persistence
 - mobile and desktop H5 browser paths
 
+## Current Phase 1 evidence
+
+Implemented automated coverage:
+
+- two independent demo users and workspaces
+- generic and email-bound invitation validation
+- concurrent claim against a one-use invitation
+- email-code and password identities resolving to the same user
+- password reset and all-session invalidation
+- login-origin demo cleanup
+
+Manually exercised against the real local stack:
+
+- SMTP delivery into Mailpit
+- generic invitation creation and claim
+- email-bound wrong-email rejection
+- mobile H5 demo, password login, registered workspace, logout, and new demo
+- role-gated invitation administration page
+
+This is not the complete V1 acceptance gate. Cross-user product access,
+recognition, deterministic domains, object deletion, automated browser E2E,
+restart persistence, backup restore, and production-like provider behavior
+remain untestable until their implementation phases.
+
 ## Recognition evaluation
 
 Create a 30–50-image private set covering:
@@ -67,4 +91,3 @@ Report:
 - Secrets are absent from the client, logs, and Git.
 - No fake provider is enabled.
 - The complete main path passes against production-like services.
-

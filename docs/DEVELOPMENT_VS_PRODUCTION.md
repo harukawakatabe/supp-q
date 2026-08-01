@@ -8,7 +8,7 @@
 | API | local Go API | supervised Go API container/process |
 | Worker | local Go worker | independent supervised worker |
 | Database | Docker PostgreSQL | production PostgreSQL with external backups |
-| Files | local MinIO | private Tencent COS or Alibaba OSS |
+| Files | SeaweedFS S3 sandbox | private Tencent COS or Alibaba OSS |
 | Email | Mailpit | verified production email provider |
 | OCR/vision | explicit fake or live test provider | live provider only |
 | LLM | explicit fake or live test provider | live provider; core flow remains independent |
@@ -65,4 +65,3 @@ Secrets live outside the Git checkout in a root-readable environment file, conta
 - Replacing PostgreSQL with client localStorage.
 - Disabling migrations or idempotency.
 - Treating a production provider outage as success.
-

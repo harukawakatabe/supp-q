@@ -1,0 +1,17 @@
+{
+  "pages": [
+    {
+      "path": "pages/today/index",
+      "style": {
+        "navigationStyle": "custom",
+        "navigationBarTitleText": "今日"
+      }
+    }
+  ],
+  "globalStyle": {
+    "navigationBarTextStyle": "black",
+    "navigationBarTitleText": "小补Q",
+    "navigationBarBackgroundColor": "#f7f5f2",
+    "backgroundColor": "#f7f5f2"
+  }
+}

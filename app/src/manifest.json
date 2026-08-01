@@ -1,0 +1,22 @@
+{
+  "name": "小补Q",
+  "appid": "",
+  "description": "Supplement capture, schedule, intake, inventory and reminder service",
+  "versionName": "0.1.0",
+  "versionCode": "10",
+  "transformPx": false,
+  "h5": {
+    "title": "小补Q · Supp Q"
+  },
+  "mp-weixin": {
+    "appid": "",
+    "setting": {
+      "urlCheck": true
+    },
+    "usingComponents": true
+  },
+  "uniStatistics": {
+    "enable": false
+  },
+  "vueVersion": "3"
+}

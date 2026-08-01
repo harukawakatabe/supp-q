@@ -10,9 +10,9 @@ Status values: `not selected`, `selected`, `configured`, `verified`.
 | H5 hostname | localhost | DNS + Caddy config | not selected |
 | API hostname | localhost | DNS + Caddy config | not selected |
 | Hong Kong server | local machine | Tencent or Alibaba lightweight server | not selected |
-| PostgreSQL | local container | server container initially or managed DB later | not selected |
-| Object storage | MinIO | private COS or OSS bucket | not selected |
-| Email | Mailpit | verified SMTP/email API provider | not selected |
+| PostgreSQL | verified 17.10 container | server container initially or managed DB later | local verified; production not selected |
+| Object storage | verified SeaweedFS S3 sandbox | private COS or OSS bucket | local verified; production not selected |
+| Email | verified Mailpit 1.30.0 | verified SMTP/email API provider | local verified; production not selected |
 | OCR/vision | fake or live test adapter | server-side provider secret | existing provider intended, exact config pending |
 | LLM | fake or live test adapter | server-side provider secret | existing Kimi intended, exact config pending |
 | Monitoring | local logs | selected logging/alert destination | not selected |
@@ -96,7 +96,7 @@ Do not paste secret values into project documents.
 | Provider secrets | never | server `.env.local` | secret file/manager |
 | Database credentials | never | server `.env.local` | secret file/manager |
 | SSH private key | never | user keychain/SSH directory | not copied into app |
-| Uploads | never | MinIO volume | private COS/OSS |
+| Uploads | never | SeaweedFS volume | private COS/OSS |
 | Private test images | never | `testdata/recognition/private/` | not deployed |
 | Deployment facts without secrets | `docs/EXTERNAL_RESOURCES.md` | same | same |
 
@@ -109,4 +109,3 @@ A resource is not `verified` until:
 - failure behavior is tested
 - logs do not expose secrets
 - backup or cleanup behavior is exercised
-

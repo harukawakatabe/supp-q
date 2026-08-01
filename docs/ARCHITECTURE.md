@@ -1,6 +1,8 @@
 # Target Architecture
 
-Status: target design, not shipped behavior.
+Status: target design with a locally verified Phase 0 runtime skeleton. Domain
+architecture below remains unimplemented unless `PROJECT_STATUS.md` says
+otherwise.
 
 ## System
 
@@ -31,7 +33,10 @@ uni/
 └── docs/           product, architecture, status, security, and runbook
 ```
 
-The official uni-app project model is a Vue project with `pages`, `static`, `App.vue`, `pages.json`, and `manifest.json`. The exact dependency versions must be taken from an official current template when the client is bootstrapped; do not invent or copy stale package versions.
+The client was bootstrapped from the official current
+`dcloudio/uni-preset-vue#vite-ts` template on 2026-08-01. DCloud packages are
+pinned to `3.0.0-5010520260709002`; the lockfile, not this paragraph, is the
+dependency source of truth.
 
 The Go server will use one module with multiple commands:
 
@@ -154,5 +159,18 @@ Production refuses to start recognition or AI capability as “available” when
 
 ## Deployment
 
-Development uses local services. Production uses Caddy for HTTPS, static H5 delivery, and API reverse proxy. PostgreSQL remains the durable source of truth; object storage is private; backup artifacts live outside the application server.
+Development uses PostgreSQL 17.10, SeaweedFS 4.29 as a replaceable local S3
+sandbox, Mailpit 1.30.0, and Caddy 2.11.4. Production uses Caddy for HTTPS,
+static H5 delivery, and API reverse proxy. PostgreSQL remains the durable source
+of truth; production objects live in private Tencent COS or Alibaba OSS; backup
+artifacts live outside the application server.
 
+The locally implemented API surface is deliberately narrow:
+
+```text
+GET /api/v1/health/live  → process liveness only
+GET /api/v1/health/ready → authenticated PostgreSQL ping
+```
+
+The worker currently proves process separation and database connectivity only.
+It does not poll or execute jobs yet.

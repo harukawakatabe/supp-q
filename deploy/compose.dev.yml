@@ -1,0 +1,96 @@
+name: suppq-dev
+
+services:
+  postgres:
+    image: postgres:17.10-alpine
+    environment:
+      POSTGRES_DB: suppq
+      POSTGRES_USER: suppq
+      POSTGRES_PASSWORD: suppq_local_only
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U suppq -d suppq"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  object-storage:
+    image: chrislusf/seaweedfs:4.29
+    environment:
+      AWS_ACCESS_KEY_ID: suppq_local
+      AWS_SECRET_ACCESS_KEY: suppq_local_only
+      S3_BUCKET: suppq-uploads
+    ports:
+      - "127.0.0.1:8333:8333"
+      - "127.0.0.1:23646:23646"
+    volumes:
+      - object_data:/data
+    command: ["mini", "-dir=/data"]
+    restart: unless-stopped
+
+  mailpit:
+    image: axllent/mailpit:v1.30.0
+    environment:
+      MP_MAX_MESSAGES: "500"
+      MP_MAX_MESSAGE_SIZE: "10485760"
+    ports:
+      - "127.0.0.1:1025:1025"
+      - "127.0.0.1:8025:8025"
+    restart: unless-stopped
+
+  api:
+    build:
+      context: ../server
+      dockerfile: Dockerfile
+    command: ["/app/suppq-api"]
+    environment:
+      SUPPQ_ENV: development
+      SUPPQ_HTTP_ADDR: 0.0.0.0:8080
+      SUPPQ_ALLOWED_ORIGIN: http://127.0.0.1:3000
+      SUPPQ_DATABASE_URL: postgres://suppq:suppq_local_only@postgres:5432/suppq?sslmode=disable
+      SUPPQ_DATABASE_TIMEOUT: 3s
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8080:8080"
+    healthcheck:
+      test: ["CMD", "/app/suppq-admin", "status"]
+      interval: 5s
+      timeout: 4s
+      retries: 20
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: ../server
+      dockerfile: Dockerfile
+    command: ["/app/suppq-worker"]
+    environment:
+      SUPPQ_ENV: development
+      SUPPQ_DATABASE_URL: postgres://suppq:suppq_local_only@postgres:5432/suppq?sslmode=disable
+      SUPPQ_DATABASE_TIMEOUT: 3s
+      SUPPQ_WORKER_INTERVAL: 30s
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  h5:
+    build:
+      context: ..
+      dockerfile: app/Dockerfile
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:3000:80"
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  object_data:

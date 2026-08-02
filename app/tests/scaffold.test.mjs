@@ -33,9 +33,13 @@ test("Phase 3 Add flow separates fake recognition from confirmed product data", 
   assert.match(page, /正面、成分表、有效期/);
   assert.match(page, /开发假识别候选，不代表图片真实内容/);
   assert.match(page, /确认并加入补充柜/);
+  assert.match(page, /原始文字证据/);
+  assert.match(page, /查看 OCR/);
   assert.match(page, /ingredientAmount>0/);
   assert.match(api, /uploadRecognitionSet/);
   assert.match(api, /confirmRecognitionSet/);
+  assert.match(api, /ocrEvidence/);
+  assert.match(api, /selectedRoute/);
 });
 
 test("authentication UI tells users that demo data is not migrated", async () => {

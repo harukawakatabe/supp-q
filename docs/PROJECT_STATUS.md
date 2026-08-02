@@ -56,16 +56,24 @@ Nothing in `uni/` is deployed or serving real users yet.
 - S3-compatible private object adapter, validated JPEG/PNG/WebP uploads (10 MB
   each), opaque object keys, tenant-scoped no-store file delivery, and worker
   cleanup before expired-demo database deletion.
-- PostgreSQL recognition worker with `SKIP LOCKED` claiming, two-minute leases,
+- PostgreSQL recognition worker with `SKIP LOCKED` claiming, five-minute leases,
   bounded attempts, exponential retry, retained failures, and explicit
   provider/model identity.
-- Explicit `fake:development` candidate provider and an OpenAI-compatible live
-  vision adapter. Production configuration rejects fake or incomplete live
-  provider settings; no live provider has been configured or accepted.
+- Explicit `fake:development`, OpenAI-compatible direct vision, and
+  evidence-first live adapters. The latter persists verbatim OCR/VL
+  transcription before Kimi structuring and can run `ocr_llm`, `direct_vl`, or
+  bounded `dual` comparison. Production configuration rejects fake or
+  incomplete stage settings.
+- Append-only migration `202608020004` stores OCR text, OCR provider/model,
+  timing, completion timestamp, selected route, stage trace, and an optional
+  direct-route comparison separately from the final candidate.
+- H5 confirmation exposes the saved OCR evidence and stage route for human
+  review; the API truncates nothing in persistence while the UI limits only its
+  visible preview.
 - H5 capture path for front, facts, and expiry images; persisted job polling,
   per-job retry, manual fallback, visible Fake banner, editable prefill, and an
   idempotent human-confirmation boundary before product creation.
-- OpenAPI 0.4 recognition contract and stable Phase 3 error codes.
+- OpenAPI 0.5 evidence-first recognition contract and stable Phase 3 error codes.
 
 ## Acceptance evidence on 2026-08-01 and 2026-08-02
 
@@ -136,6 +144,31 @@ Nothing in `uni/` is deployed or serving real users yet.
 - Rebuilt H5 browser verification exposed separate three-image and manual-entry
   paths, explicit private/Fake-provider copy, all three required image roles,
   and no browser console warnings or errors.
+- Rebuilt local stack applied migration `202608020004`; the fresh-schema
+  recognition integration test proves Fake OCR evidence persistence, tenant
+  isolation, retained failures, retry, and confirmation against PostgreSQL.
+- Provider unit tests prove that structuring cannot run before the evidence
+  sink succeeds, persistence failure blocks structuring, and punctuation-only
+  OCR output is rejected.
+- A live, non-private synthetic-label run used Qwen/Qwen3-VL-30B-A3B-Instruct
+  for transcription and kimi-k2.5 for text-only structuring. All three OCR
+  texts were persisted first. It recovered `Serving Size: 1 Tablet`, `Servings
+  Per Container: 120`, `Vitamin C ... 500 mg`, and `EXP 2027-03-31`; the facts
+  and expiry candidates contained the corresponding structured values. OCR
+  stage time was 1.98–2.80 s and structure time was 1.95–6.11 s on this run.
+- The same synthetic fixtures proved the configured
+  `deepseek-ai/DeepSeek-OCR` endpoint returned punctuation-only output. It is
+  therefore rejected for the current development route and guarded before
+  Kimi invocation. This is measured provider failure, not an application-side
+  success or a claim about the model generally.
+- A focused live retry after tightening the front-label prompt kept `500 mg` in
+  the persisted OCR evidence while leaving `dose` and
+  `ingredientServingQuantity` empty, removing the observed strength/dose
+  contamination.
+- Rebuilt H5 browser verification expanded the saved OCR evidence inside the
+  confirmation card, showed provider model and timing, had viewport width equal
+  to document scroll width, and logged no application error. Two file-picker
+  warnings were produced by automation activation, not by the application path.
 
 ## In progress
 
@@ -143,9 +176,9 @@ Nothing in `uni/` is deployed or serving real users yet.
   and a Records page.
 - Adding automated browser E2E and a repeatable restart-persistence check; the
   current H5 acceptance is manual browser evidence.
-- Selecting/configuring the real vision provider and building a private
-  30–50-image recognition evaluation set. Adapter code alone is not provider
-  acceptance.
+- Building and explicitly authorizing a private 30–50-image recognition
+  evaluation set. Synthetic live success proves connectivity and evidence
+  ordering, not real-label accuracy or production-provider acceptance.
 - Adding the uni-app non-H5 upload adapter and object-orphan reconciliation.
 
 ## Not started

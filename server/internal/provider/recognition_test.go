@@ -10,11 +10,11 @@ func TestFakeProviderIsExplicitAndPartial(t *testing.T) {
 	if provider.Name() != "fake:development" {
 		t.Fatal("fake provider must identify itself")
 	}
-	result, err := provider.Recognize(context.Background(), "front", "image/jpeg", []byte("image"))
+	result, err := provider.Recognize(context.Background(), "front", "image/jpeg", []byte("image"), func(context.Context, Evidence) error { return nil })
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Status != "partial" || result.Fields["productName"] == "" {
+	if result.Candidate.Status != "partial" || result.Candidate.Fields["productName"] == "" {
 		t.Fatalf("unexpected fake result: %+v", result)
 	}
 }

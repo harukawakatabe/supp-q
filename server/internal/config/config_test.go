@@ -84,6 +84,36 @@ func TestRecognitionWorkerRejectsIncompleteLiveProviderInProduction(t *testing.T
 	}
 }
 
+func TestRecognitionWorkerAcceptsEvidencePipelineAndRejectsMissingStage(t *testing.T) {
+	cfg := Config{
+		Environment: "production", RecognitionProvider: "evidence_pipeline", RecognitionMode: "ocr_llm",
+		OCRBaseURL: "https://ocr.example.com/v1", OCRAPIKey: "ocr-secret", OCRModel: "ocr-model",
+		StructureBaseURL: "https://kimi.example.com", StructureAPIKey: "kimi-secret", StructureModel: "kimi-model",
+	}
+	if err := cfg.ValidateRecognitionWorker(); err != nil {
+		t.Fatalf("complete evidence pipeline should pass: %v", err)
+	}
+	cfg.StructureAPIKey = ""
+	if err := cfg.ValidateRecognitionWorker(); err == nil {
+		t.Fatal("missing structure key must fail")
+	}
+}
+
+func TestRecognitionWorkerDualModeRequiresDirectProvider(t *testing.T) {
+	cfg := Config{
+		Environment: "production", RecognitionProvider: "evidence_pipeline", RecognitionMode: "dual",
+		OCRBaseURL: "https://ocr.example.com/v1", OCRAPIKey: "ocr-secret", OCRModel: "ocr-model",
+		StructureBaseURL: "https://kimi.example.com", StructureAPIKey: "kimi-secret", StructureModel: "kimi-model",
+	}
+	if err := cfg.ValidateRecognitionWorker(); err == nil {
+		t.Fatal("dual mode without a direct provider must fail")
+	}
+	cfg.VLBaseURL, cfg.VLAPIKey, cfg.VLModel = "https://vl.example.com/v1", "vl-secret", "vl-model"
+	if err := cfg.ValidateRecognitionWorker(); err != nil {
+		t.Fatalf("complete dual pipeline should pass: %v", err)
+	}
+}
+
 func TestFromEnvRequiresExplicitSecureObjectStorageInProduction(t *testing.T) {
 	t.Setenv("SUPPQ_ENV", "production")
 	t.Setenv("SUPPQ_DATABASE_URL", "postgres://user:pass@db.example/suppq?sslmode=require")

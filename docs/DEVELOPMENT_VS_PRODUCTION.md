@@ -58,11 +58,14 @@ Secrets live outside the Git checkout in a root-readable environment file, conta
 - Local HTTP instead of production HTTPS.
 - A committed development-only HMAC pepper instead of a secret-manager value.
 
-The local recognition chain is intentionally useful for workflow verification,
-not accuracy claims: `fake:development` always returns visibly labelled,
-non-final candidates. Production startup rejects that provider and requires an
-OpenAI-compatible base URL, model, and API key. Those values configure transport
-only; production acceptance additionally requires the private evaluation set.
+Compose intentionally stays on visibly labelled, non-final
+`fake:development` candidates. A developer may opt into the evidence pipeline:
+the image reader writes plain text to PostgreSQL before Kimi receives it, and
+the H5 confirmation page exposes that text. Production rejects Fake and
+requires complete credentials for every selected stage. Working credentials
+configure transport only; production acceptance additionally requires the
+private evaluation set. The 2026-08-02 synthetic live run is connectivity and
+ordering evidence, not real-label accuracy evidence.
 
 ## Behavior differences that are forbidden
 

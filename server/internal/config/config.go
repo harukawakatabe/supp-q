@@ -10,59 +10,83 @@ import (
 )
 
 type Config struct {
-	Environment         string
-	HTTPAddr            string
-	AllowedOrigin       string
-	DatabaseURL         string
-	DatabaseTimeout     time.Duration
-	ShutdownTimeout     time.Duration
-	WorkerInterval      time.Duration
-	TokenPepper         string
-	SessionCookie       string
-	SessionTTL          time.Duration
-	DemoTTL             time.Duration
-	EmailCodeTTL        time.Duration
-	CookieSecure        bool
-	SMTPHost            string
-	SMTPPort            string
-	SMTPFrom            string
-	SMTPUsername        string
-	SMTPPassword        string
-	ObjectEndpoint      string
-	ObjectAccessKey     string
-	ObjectSecretKey     string
-	ObjectBucket        string
-	ObjectRegion        string
-	ObjectSecure        bool
-	RecognitionProvider string
-	RecognitionBaseURL  string
-	RecognitionAPIKey   string
-	RecognitionModel    string
-	RecognitionTimeout  time.Duration
+	Environment          string
+	HTTPAddr             string
+	AllowedOrigin        string
+	DatabaseURL          string
+	DatabaseTimeout      time.Duration
+	ShutdownTimeout      time.Duration
+	WorkerInterval       time.Duration
+	TokenPepper          string
+	SessionCookie        string
+	SessionTTL           time.Duration
+	DemoTTL              time.Duration
+	EmailCodeTTL         time.Duration
+	CookieSecure         bool
+	SMTPHost             string
+	SMTPPort             string
+	SMTPFrom             string
+	SMTPUsername         string
+	SMTPPassword         string
+	ObjectEndpoint       string
+	ObjectAccessKey      string
+	ObjectSecretKey      string
+	ObjectBucket         string
+	ObjectRegion         string
+	ObjectSecure         bool
+	RecognitionProvider  string
+	RecognitionBaseURL   string
+	RecognitionAPIKey    string
+	RecognitionModel     string
+	RecognitionTimeout   time.Duration
+	RecognitionMode      string
+	OCRBaseURL           string
+	OCRAPIKey            string
+	OCRModel             string
+	StructureBaseURL     string
+	StructureAPIKey      string
+	StructureModel       string
+	StructureAuthMode    string
+	StructureThinkingOff bool
+	VLBaseURL            string
+	VLAPIKey             string
+	VLModel              string
 }
 
 func FromEnv() (Config, error) {
 	cfg := Config{
-		Environment:         envOr("SUPPQ_ENV", "development"),
-		HTTPAddr:            envOr("SUPPQ_HTTP_ADDR", "127.0.0.1:8080"),
-		AllowedOrigin:       envOr("SUPPQ_ALLOWED_ORIGIN", "http://127.0.0.1:5173"),
-		DatabaseURL:         os.Getenv("SUPPQ_DATABASE_URL"),
-		TokenPepper:         envOr("SUPPQ_TOKEN_PEPPER", "suppq-development-pepper-not-for-production"),
-		SessionCookie:       envOr("SUPPQ_SESSION_COOKIE", "suppq_session"),
-		SMTPHost:            envOr("SUPPQ_SMTP_HOST", "127.0.0.1"),
-		SMTPPort:            envOr("SUPPQ_SMTP_PORT", "1025"),
-		SMTPFrom:            envOr("SUPPQ_SMTP_FROM", "小补Q <no-reply@suppq.local>"),
-		SMTPUsername:        strings.TrimSpace(os.Getenv("SUPPQ_SMTP_USERNAME")),
-		SMTPPassword:        os.Getenv("SUPPQ_SMTP_PASSWORD"),
-		ObjectEndpoint:      envOr("SUPPQ_OBJECT_ENDPOINT", "127.0.0.1:8333"),
-		ObjectAccessKey:     envOr("SUPPQ_OBJECT_ACCESS_KEY", "suppq_local"),
-		ObjectSecretKey:     envOr("SUPPQ_OBJECT_SECRET_KEY", "suppq_local_only"),
-		ObjectBucket:        envOr("SUPPQ_OBJECT_BUCKET", "suppq-uploads"),
-		ObjectRegion:        envOr("SUPPQ_OBJECT_REGION", "us-east-1"),
-		RecognitionProvider: envOr("SUPPQ_RECOGNITION_PROVIDER", "fake"),
-		RecognitionBaseURL:  strings.TrimSpace(os.Getenv("SUPPQ_RECOGNITION_BASE_URL")),
-		RecognitionAPIKey:   os.Getenv("SUPPQ_RECOGNITION_API_KEY"),
-		RecognitionModel:    strings.TrimSpace(os.Getenv("SUPPQ_RECOGNITION_MODEL")),
+		Environment:          envOr("SUPPQ_ENV", "development"),
+		HTTPAddr:             envOr("SUPPQ_HTTP_ADDR", "127.0.0.1:8080"),
+		AllowedOrigin:        envOr("SUPPQ_ALLOWED_ORIGIN", "http://127.0.0.1:5173"),
+		DatabaseURL:          os.Getenv("SUPPQ_DATABASE_URL"),
+		TokenPepper:          envOr("SUPPQ_TOKEN_PEPPER", "suppq-development-pepper-not-for-production"),
+		SessionCookie:        envOr("SUPPQ_SESSION_COOKIE", "suppq_session"),
+		SMTPHost:             envOr("SUPPQ_SMTP_HOST", "127.0.0.1"),
+		SMTPPort:             envOr("SUPPQ_SMTP_PORT", "1025"),
+		SMTPFrom:             envOr("SUPPQ_SMTP_FROM", "小补Q <no-reply@suppq.local>"),
+		SMTPUsername:         strings.TrimSpace(os.Getenv("SUPPQ_SMTP_USERNAME")),
+		SMTPPassword:         os.Getenv("SUPPQ_SMTP_PASSWORD"),
+		ObjectEndpoint:       envOr("SUPPQ_OBJECT_ENDPOINT", "127.0.0.1:8333"),
+		ObjectAccessKey:      envOr("SUPPQ_OBJECT_ACCESS_KEY", "suppq_local"),
+		ObjectSecretKey:      envOr("SUPPQ_OBJECT_SECRET_KEY", "suppq_local_only"),
+		ObjectBucket:         envOr("SUPPQ_OBJECT_BUCKET", "suppq-uploads"),
+		ObjectRegion:         envOr("SUPPQ_OBJECT_REGION", "us-east-1"),
+		RecognitionProvider:  envOr("SUPPQ_RECOGNITION_PROVIDER", "fake"),
+		RecognitionBaseURL:   strings.TrimSpace(os.Getenv("SUPPQ_RECOGNITION_BASE_URL")),
+		RecognitionAPIKey:    os.Getenv("SUPPQ_RECOGNITION_API_KEY"),
+		RecognitionModel:     strings.TrimSpace(os.Getenv("SUPPQ_RECOGNITION_MODEL")),
+		RecognitionMode:      envOr("SUPPQ_RECOGNITION_MODE", "ocr_llm"),
+		OCRBaseURL:           strings.TrimSpace(os.Getenv("SUPPQ_OCR_BASE_URL")),
+		OCRAPIKey:            os.Getenv("SUPPQ_OCR_API_KEY"),
+		OCRModel:             strings.TrimSpace(os.Getenv("SUPPQ_OCR_MODEL")),
+		StructureBaseURL:     strings.TrimSpace(os.Getenv("SUPPQ_STRUCTURE_BASE_URL")),
+		StructureAPIKey:      os.Getenv("SUPPQ_STRUCTURE_API_KEY"),
+		StructureModel:       strings.TrimSpace(os.Getenv("SUPPQ_STRUCTURE_MODEL")),
+		StructureAuthMode:    envOr("SUPPQ_STRUCTURE_AUTH_MODE", "x-api-key"),
+		StructureThinkingOff: !strings.EqualFold(strings.TrimSpace(os.Getenv("SUPPQ_STRUCTURE_THINKING")), "enabled"),
+		VLBaseURL:            strings.TrimSpace(os.Getenv("SUPPQ_VL_BASE_URL")),
+		VLAPIKey:             os.Getenv("SUPPQ_VL_API_KEY"),
+		VLModel:              strings.TrimSpace(os.Getenv("SUPPQ_VL_MODEL")),
 	}
 	cfg.ObjectSecure = strings.EqualFold(strings.TrimSpace(os.Getenv("SUPPQ_OBJECT_SECURE")), "true")
 
@@ -117,8 +141,14 @@ func FromEnv() (Config, error) {
 			return Config{}, errors.New("SUPPQ_OBJECT_SECURE must be true in production")
 		}
 	}
-	if cfg.RecognitionProvider != "fake" && cfg.RecognitionProvider != "openai_vision" {
-		return Config{}, errors.New("SUPPQ_RECOGNITION_PROVIDER must be fake or openai_vision")
+	if cfg.RecognitionProvider != "fake" && cfg.RecognitionProvider != "openai_vision" && cfg.RecognitionProvider != "evidence_pipeline" {
+		return Config{}, errors.New("SUPPQ_RECOGNITION_PROVIDER must be fake, openai_vision, or evidence_pipeline")
+	}
+	if cfg.RecognitionMode != "ocr_llm" && cfg.RecognitionMode != "direct_vl" && cfg.RecognitionMode != "dual" {
+		return Config{}, errors.New("SUPPQ_RECOGNITION_MODE must be ocr_llm, direct_vl, or dual")
+	}
+	if cfg.StructureAuthMode != "x-api-key" && cfg.StructureAuthMode != "bearer" {
+		return Config{}, errors.New("SUPPQ_STRUCTURE_AUTH_MODE must be x-api-key or bearer")
 	}
 	return cfg, nil
 }
@@ -130,8 +160,20 @@ func (cfg Config) ValidateRecognitionWorker() error {
 	if cfg.RecognitionProvider == "fake" {
 		return errors.New("fake recognition provider is forbidden in production")
 	}
-	if cfg.RecognitionProvider != "openai_vision" || cfg.RecognitionBaseURL == "" || cfg.RecognitionAPIKey == "" || cfg.RecognitionModel == "" {
+	if cfg.RecognitionProvider == "openai_vision" {
+		if cfg.RecognitionBaseURL == "" || cfg.RecognitionAPIKey == "" || cfg.RecognitionModel == "" {
+			return errors.New("production direct vision provider configuration is incomplete")
+		}
+		return nil
+	}
+	if cfg.RecognitionProvider != "evidence_pipeline" {
 		return errors.New("production recognition provider configuration is incomplete")
+	}
+	if cfg.RecognitionMode != "direct_vl" && (cfg.OCRBaseURL == "" || cfg.OCRAPIKey == "" || cfg.OCRModel == "" || cfg.StructureBaseURL == "" || cfg.StructureAPIKey == "" || cfg.StructureModel == "") {
+		return errors.New("production OCR and structure provider configuration is incomplete")
+	}
+	if cfg.RecognitionMode != "ocr_llm" && (cfg.VLBaseURL == "" || cfg.VLAPIKey == "" || cfg.VLModel == "") {
+		return errors.New("production direct comparison provider configuration is incomplete")
 	}
 	return nil
 }

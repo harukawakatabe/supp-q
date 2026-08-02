@@ -13,8 +13,8 @@ Status values: `not selected`, `selected`, `configured`, `verified`.
 | PostgreSQL | verified 17.10 container | server container initially or managed DB later | local verified; production not selected |
 | Object storage | verified SeaweedFS S3 sandbox | private COS or OSS bucket | local verified; production not selected |
 | Email | verified Mailpit 1.30.0 | verified SMTP/email API provider | local verified; production not selected |
-| OCR/vision | verified Fake workflow; unverified live adapter | server-side provider secret | provider/model/key not supplied |
-| LLM | fake or live test adapter | server-side provider secret | existing Kimi intended, exact config pending |
+| OCR/vision | Fake default; Qwen VL synthetic live check passed | server-side provider secret | development route measured; production not selected |
+| LLM | Kimi synthetic structuring check passed | server-side provider secret | development route measured; production not selected |
 | Monitoring | local logs | selected logging/alert destination | not selected |
 | Backup target | disposable | external bucket or separate backup destination | not selected |
 | Admin identity | local `admin@suppq.local` acceptance user | owner-controlled verified email | local verified; production not provided |
@@ -72,13 +72,20 @@ Do not paste secret values into project documents.
 - timeout and quota.
 - data-retention terms recorded by the owner.
 
-Place the local values only in `uni/server/.env.local` (ignored) using
-`SUPPQ_RECOGNITION_PROVIDER=openai_vision`,
-`SUPPQ_RECOGNITION_BASE_URL`, `SUPPQ_RECOGNITION_MODEL`, and
-`SUPPQ_RECOGNITION_API_KEY`. Production places the same variable names in the
-server/worker secret environment, never in the H5 build. The API key is needed
-by the worker, not by the client. Provider selection is incomplete until the
-private 30–50-image evaluation and timeout/failure tests pass.
+Place local values only in `uni/server/.env.local` (ignored). For the
+evidence-first route use `SUPPQ_RECOGNITION_PROVIDER=evidence_pipeline`,
+`SUPPQ_RECOGNITION_MODE=ocr_llm`, `SUPPQ_OCR_BASE_URL/API_KEY/MODEL`, and
+`SUPPQ_STRUCTURE_BASE_URL/API_KEY/MODEL/AUTH_MODE/THINKING`. Optional
+`SUPPQ_VL_*` values enable `direct_vl` or `dual`; dual spends an additional
+image-model call per image. The legacy `SUPPQ_RECOGNITION_*` URL/key/model
+triple remains the direct OpenAI-compatible adapter.
+
+Production places the selected variables in the worker secret environment,
+never in the H5 build. Keys are needed by the worker, not the client. The
+current measured development mapping uses Qwen VL as the transcription stage
+and Kimi as the structure stage. The configured DeepSeek-OCR route failed the
+synthetic check and must not be promoted. Provider selection remains incomplete
+until the private 30–50-image evaluation and timeout/failure tests pass.
 
 ### LLM
 

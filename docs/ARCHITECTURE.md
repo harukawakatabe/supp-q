@@ -186,12 +186,32 @@ POST /api/v1/recognition/sets/{id}/confirm
 GET /api/v1/files/{id}
 ```
 
-The worker claims recognition jobs with PostgreSQL row locking and leases,
-loads private objects from S3-compatible storage, records provider/model
+The worker claims recognition jobs with PostgreSQL row locking and five-minute
+leases, loads private objects from S3-compatible storage, records provider/model
 identity, retries retryable failures with backoff, and retains failed uploads
-for retry or manual confirmation. It deletes expired demo objects before the
-identity cascade. Product and intake writes remain synchronous transactions;
-AI explanation and reminder jobs are not implemented.
+for retry or manual confirmation. Evidence-first mode has a hard ordering:
+
+```text
+private image
+→ VL/OCR plain-text transcription
+→ recognition_jobs.ocr_text + provider/model/timing committed
+→ Kimi text-only structuring
+→ candidate + stage trace committed
+→ human review and confirmation
+```
+
+If the OCR text cannot be committed, Kimi is not called. A text-quality gate
+also rejects empty or punctuation-only provider output before structuring.
+`ocr_llm` is the cost-conscious default live mode; `direct_vl` uses one combined
+vision call but still persists the visible text returned with its candidate,
+and `dual` stores both route traces and chooses a higher-quality direct candidate
+only when it clears a defined margin. Dual mode
+roughly doubles image-model cost and is intended for bounded evaluation, not an
+unnoticed production default.
+
+The worker deletes expired demo objects before the identity cascade. Product
+and intake writes remain synchronous transactions; AI explanation and reminder
+jobs are not implemented.
 
 Identity details and the remaining security gaps are recorded in
 `docs/IDENTITY.md`; stable errors are in `docs/ERRORS.md`.

@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1600" viewBox="0 0 1200 1600">
+  <rect width="1200" height="1600" fill="#f3f0e8"/>
+  <rect x="120" y="420" width="960" height="700" rx="35" fill="#fff" stroke="#292824" stroke-width="8"/>
+  <text x="600" y="690" text-anchor="middle" font-family="Courier New, monospace" font-size="90" fill="#292824">LOT SQ20260802</text>
+  <text x="600" y="900" text-anchor="middle" font-family="Courier New, monospace" font-weight="700" font-size="112" fill="#292824">EXP 2027-03-31</text>
+</svg>

@@ -52,6 +52,13 @@ func main() {
 	var recognizer provider.Recognition = provider.Fake{}
 	if cfg.RecognitionProvider == "openai_vision" {
 		recognizer = provider.NewOpenAIVision(provider.VisionConfig{BaseURL: cfg.RecognitionBaseURL, APIKey: cfg.RecognitionAPIKey, Model: cfg.RecognitionModel, Timeout: cfg.RecognitionTimeout})
+	} else if cfg.RecognitionProvider == "evidence_pipeline" {
+		recognizer = provider.NewEvidencePipeline(provider.PipelineConfig{
+			Mode:      cfg.RecognitionMode,
+			OCR:       provider.TextOCRConfig{BaseURL: cfg.OCRBaseURL, APIKey: cfg.OCRAPIKey, Model: cfg.OCRModel, Timeout: cfg.RecognitionTimeout},
+			Structure: provider.AnthropicConfig{BaseURL: cfg.StructureBaseURL, APIKey: cfg.StructureAPIKey, Model: cfg.StructureModel, AuthMode: cfg.StructureAuthMode, DisableThinking: cfg.StructureThinkingOff, Timeout: cfg.RecognitionTimeout},
+			Direct:    provider.VisionConfig{BaseURL: cfg.VLBaseURL, APIKey: cfg.VLAPIKey, Model: cfg.VLModel, Timeout: cfg.RecognitionTimeout},
+		})
 	}
 	recognitionService := recognition.New(pool, objectStore, catalog.New(pool))
 

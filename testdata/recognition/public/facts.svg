@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1600" viewBox="0 0 1200 1600">
+  <rect width="1200" height="1600" fill="#fffefa"/>
+  <rect x="90" y="90" width="1020" height="1420" fill="none" stroke="#111" stroke-width="10"/>
+  <text x="130" y="230" font-family="Arial, sans-serif" font-weight="700" font-size="112">Supplement Facts</text>
+  <line x1="120" y1="280" x2="1080" y2="280" stroke="#111" stroke-width="24"/>
+  <text x="130" y="370" font-family="Arial, sans-serif" font-size="52">Serving Size: 1 Tablet</text>
+  <text x="130" y="445" font-family="Arial, sans-serif" font-size="52">Servings Per Container: 120</text>
+  <line x1="120" y1="500" x2="1080" y2="500" stroke="#111" stroke-width="12"/>
+  <text x="130" y="600" font-family="Arial, sans-serif" font-size="60">Vitamin C (as Ascorbic Acid)</text>
+  <text x="860" y="600" font-family="Arial, sans-serif" font-size="60">500 mg</text>
+  <line x1="120" y1="650" x2="1080" y2="650" stroke="#111" stroke-width="6"/>
+  <text x="130" y="820" font-family="Arial, sans-serif" font-size="48">Other Ingredients: cellulose.</text>
+  <text x="130" y="980" font-family="Arial, sans-serif" font-size="48">Suggested Use: Adults take 1 tablet</text>
+  <text x="130" y="1050" font-family="Arial, sans-serif" font-size="48">daily with a meal.</text>
+  <text x="130" y="1320" font-family="Arial, sans-serif" font-size="48">NET CONTENTS: 120 TABLETS</text>
+</svg>

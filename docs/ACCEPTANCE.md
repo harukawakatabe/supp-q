@@ -56,6 +56,9 @@ Implemented automated coverage:
 - persisted recognition job claiming, explicit Fake provenance, retained
   provider failures, manual fallback, retry, and idempotent confirmation
 - proof that recognition candidates create no product before human confirmation
+- proof that OCR/VL transcription is committed before Kimi structuring and a
+  failed evidence write prevents the structuring request
+- rejection of empty or punctuation-only transcription before downstream cost
 
 Manually exercised against the real local stack:
 
@@ -66,13 +69,16 @@ Manually exercised against the real local stack:
 - role-gated invitation administration page
 - proxied multipart upload to private local object storage, three worker job
   completions, authorized byte-for-byte file delivery, unauthenticated 401, and
-  repeat-safe confirmation returning one product
+repeat-safe confirmation returning one product
+- non-private synthetic Qwen VL → persisted transcription → Kimi processing
+  for front, facts, and expiry, with provider/model/timing traces visible
 
 This is not the complete V1 acceptance gate. Expired-demo object cleanup is
 wired but account deletion, automated browser E2E, restart persistence, backup
 restore, and production-like provider behavior remain unaccepted. The Fake
-provider validates orchestration and safety boundaries only; it is not OCR
-accuracy evidence.
+provider validates orchestration and safety boundaries only. The synthetic
+live run validates connectivity and evidence ordering only; it is not private
+real-label accuracy evidence.
 
 ## Recognition evaluation
 
@@ -92,6 +98,7 @@ Report:
 - false confident values
 - latency
 - provider failure rate
+- OCR-to-structure disagreement and direct-VL disagreement on a bounded dual subset
 
 ## Production gate
 

@@ -43,6 +43,9 @@ internal error without returning it to the client.
 Recognition job failures are persisted as job state rather than returned as
 the upload request's HTTP error. Current codes include
 `recognition_not_configured`, `provider_unavailable`, `provider_http_error`,
-`provider_invalid_response`, and `storage_unavailable`. Retryable failures are
+`provider_invalid_response`, `ocr_unavailable`, `ocr_http_error`,
+`ocr_invalid_response`, `ocr_unusable`, `structure_unavailable`,
+`structure_http_error`, `structure_invalid_response`,
+`evidence_persistence_failed`, and `storage_unavailable`. Retryable failures are
 requeued up to the stored `maxAttempts`; terminal failures retain the image and
 remain manually confirmable.

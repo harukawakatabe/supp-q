@@ -51,8 +51,17 @@ type Job struct {
 	MaxAttempts  int                 `json:"maxAttempts"`
 	Confidence   float64             `json:"confidence"`
 	Result       *provider.Candidate `json:"result,omitempty"`
+	OCREvidence  *OCREvidence        `json:"ocrEvidence,omitempty"`
+	Trace        *provider.Trace     `json:"trace,omitempty"`
 	CreatedAt    time.Time           `json:"createdAt"`
 	UpdatedAt    time.Time           `json:"updatedAt"`
+}
+type OCREvidence struct {
+	RawText     string    `json:"rawText"`
+	Provider    string    `json:"provider"`
+	Model       string    `json:"model"`
+	DurationMS  int64     `json:"durationMs"`
+	CompletedAt time.Time `json:"completedAt"`
 }
 type Set struct {
 	ID        string    `json:"id"`
@@ -222,15 +231,18 @@ func (service *Service) GetSet(ctx context.Context, scope Scope, id string) (Set
 	if err != nil {
 		return Set{}, err
 	}
-	jobRows, err := service.pool.Query(ctx, `SELECT id,role,status,provider,attempt,max_attempts,confidence::float8,result,error_code,error_message,created_at,updated_at FROM recognition_jobs WHERE recognition_set_id=$1 AND user_id=$2 AND workspace_id=$3 ORDER BY CASE role WHEN 'front' THEN 1 WHEN 'facts' THEN 2 ELSE 3 END`, id, scope.UserID, scope.WorkspaceID)
+	jobRows, err := service.pool.Query(ctx, `SELECT id,role,status,provider,attempt,max_attempts,confidence::float8,result,error_code,error_message,ocr_text,ocr_provider,ocr_model,ocr_duration_ms,ocr_completed_at,trace,created_at,updated_at FROM recognition_jobs WHERE recognition_set_id=$1 AND user_id=$2 AND workspace_id=$3 ORDER BY CASE role WHEN 'front' THEN 1 WHEN 'facts' THEN 2 ELSE 3 END`, id, scope.UserID, scope.WorkspaceID)
 	if err != nil {
 		return Set{}, err
 	}
 	result.Jobs = []Job{}
 	for jobRows.Next() {
 		var item Job
-		var raw []byte
-		if err = jobRows.Scan(&item.ID, &item.Role, &item.Status, &item.Provider, &item.Attempt, &item.MaxAttempts, &item.Confidence, &raw, &item.ErrorCode, &item.ErrorMessage, &item.CreatedAt, &item.UpdatedAt); err != nil {
+		var raw, rawTrace []byte
+		var ocrText, ocrProvider, ocrModel string
+		var ocrDuration *int64
+		var ocrCompleted *time.Time
+		if err = jobRows.Scan(&item.ID, &item.Role, &item.Status, &item.Provider, &item.Attempt, &item.MaxAttempts, &item.Confidence, &raw, &item.ErrorCode, &item.ErrorMessage, &ocrText, &ocrProvider, &ocrModel, &ocrDuration, &ocrCompleted, &rawTrace, &item.CreatedAt, &item.UpdatedAt); err != nil {
 			jobRows.Close()
 			return Set{}, err
 		}
@@ -241,6 +253,21 @@ func (service *Service) GetSet(ctx context.Context, scope Scope, id string) (Set
 				return Set{}, err
 			}
 			item.Result = &candidate
+		}
+		if ocrCompleted != nil {
+			duration := int64(0)
+			if ocrDuration != nil {
+				duration = *ocrDuration
+			}
+			item.OCREvidence = &OCREvidence{RawText: ocrText, Provider: ocrProvider, Model: ocrModel, DurationMS: duration, CompletedAt: *ocrCompleted}
+		}
+		if len(rawTrace) > 0 && string(rawTrace) != "{}" {
+			var trace provider.Trace
+			if err = json.Unmarshal(rawTrace, &trace); err != nil {
+				jobRows.Close()
+				return Set{}, err
+			}
+			item.Trace = &trace
 		}
 		result.Jobs = append(result.Jobs, item)
 	}
@@ -301,26 +328,41 @@ func (service *Service) RunOne(ctx context.Context, recognizer provider.Recognit
 		return false, err
 	}
 	job.Attempt++
-	if _, err = tx.Exec(ctx, `UPDATE recognition_jobs SET status='running',provider=$1,attempt=$2,started_at=COALESCE(started_at,$3),lease_until=$4,updated_at=$3 WHERE id=$5`, recognizer.Name(), job.Attempt, now, now.Add(2*time.Minute), job.ID); err != nil {
+	if _, err = tx.Exec(ctx, `UPDATE recognition_jobs SET status='running',provider=$1,attempt=$2,started_at=COALESCE(started_at,$3),lease_until=$4,updated_at=$3 WHERE id=$5`, recognizer.Name(), job.Attempt, now, now.Add(5*time.Minute), job.ID); err != nil {
 		return false, err
 	}
 	if err = tx.Commit(ctx); err != nil {
 		return false, err
 	}
-	jobCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
+	jobCtx, cancel := context.WithTimeout(ctx, 4*time.Minute)
 	defer cancel()
 	data, runErr := service.objects.Get(jobCtx, job.ObjectKey)
 	if runErr != nil {
 		runErr = &provider.Failure{Code: "storage_unavailable", Message: "读取识别图片失败，任务将自动重试。", Retryable: true}
 	}
-	var candidate provider.Candidate
+	var recognitionResult provider.Result
 	if runErr == nil {
-		candidate, runErr = recognizer.Recognize(jobCtx, job.Role, job.MIME, data)
+		recognitionResult, runErr = recognizer.Recognize(jobCtx, job.Role, job.MIME, data, func(sinkCtx context.Context, evidence provider.Evidence) error {
+			savedAt := service.now()
+			result, saveErr := service.pool.Exec(sinkCtx, `UPDATE recognition_jobs SET ocr_text=$1,ocr_provider=$2,ocr_model=$3,ocr_duration_ms=$4,ocr_completed_at=$5,updated_at=$5 WHERE id=$6 AND status='running'`, evidence.RawText, evidence.Provider, evidence.Model, evidence.DurationMS, savedAt, job.ID)
+			if saveErr != nil {
+				return saveErr
+			}
+			if result.RowsAffected() != 1 {
+				return errors.New("recognition job no longer running")
+			}
+			return nil
+		})
 	}
 	if runErr != nil {
 		return true, service.finishFailure(ctx, job, recognizer.Name(), runErr)
 	}
+	candidate := recognitionResult.Candidate
 	encoded, err := json.Marshal(candidate)
+	if err != nil {
+		return true, service.finishFailure(ctx, job, recognizer.Name(), err)
+	}
+	trace, err := json.Marshal(recognitionResult.Trace)
 	if err != nil {
 		return true, service.finishFailure(ctx, job, recognizer.Name(), err)
 	}
@@ -329,7 +371,7 @@ func (service *Service) RunOne(ctx context.Context, recognizer provider.Recognit
 		status = "succeeded"
 	}
 	completed := service.now()
-	if _, err = service.pool.Exec(ctx, `UPDATE recognition_jobs SET status=$1,provider=$2,confidence=$3,result=$4,error_code='',error_message='',lease_until=NULL,completed_at=$5,updated_at=$5 WHERE id=$6`, status, recognizer.Name(), candidate.Confidence, encoded, completed, job.ID); err != nil {
+	if _, err = service.pool.Exec(ctx, `UPDATE recognition_jobs SET status=$1,provider=$2,confidence=$3,result=$4,trace=$5,error_code='',error_message='',lease_until=NULL,completed_at=$6,updated_at=$6 WHERE id=$7`, status, recognizer.Name(), candidate.Confidence, encoded, trace, completed, job.ID); err != nil {
 		return true, err
 	}
 	return true, service.refreshSetStatus(ctx, job.SetID, completed)

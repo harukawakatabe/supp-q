@@ -50,15 +50,18 @@ still required; the checklist item above is not yet fully closed.
 - Keys remain server-side.
 - Provider content is untrusted.
 - Model output is validated.
+- OCR/VL plain text is persisted before structuring; a failed evidence commit
+  blocks the downstream LLM request.
+- Empty and punctuation-only provider output is rejected before structuring.
 - OCR candidates require confirmation.
 - LLM cannot mutate deterministic data directly.
 - Fake providers are visibly identified and forbidden in production acceptance.
 
-The live adapter treats label text as untrusted input, requests structured JSON,
-caps response size, normalizes confidence/status, and rejects an expiry date
-without matching visible evidence. It has not been configured against a real
-provider or accuracy-tested, so these guards are implementation evidence, not
-live OCR acceptance.
+The live adapters treat label text as untrusted input, cap response size,
+normalize confidence/status, and reject an expiry date without matching visible
+evidence. A non-private synthetic check passed Qwen VL transcription and Kimi
+structuring but no private accuracy set has been authorized or accepted; that
+boundary remains explicit.
 
 ## Health-context data
 

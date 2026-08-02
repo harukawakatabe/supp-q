@@ -24,9 +24,40 @@ type Candidate struct {
 	Fields     map[string]any `json:"fields,omitempty"`
 }
 
+// Evidence is the verbatim text produced by the image-reading stage. The
+// worker persists it before any model is allowed to structure it.
+type Evidence struct {
+	RawText    string `json:"rawText"`
+	Provider   string `json:"provider"`
+	Model      string `json:"model"`
+	DurationMS int64  `json:"durationMs"`
+}
+
+type StageTrace struct {
+	Provider   string `json:"provider"`
+	Model      string `json:"model"`
+	DurationMS int64  `json:"durationMs"`
+}
+
+type Trace struct {
+	Mode            string      `json:"mode"`
+	SelectedRoute   string      `json:"selectedRoute"`
+	OCR             *StageTrace `json:"ocr,omitempty"`
+	Structure       *StageTrace `json:"structure,omitempty"`
+	Direct          *StageTrace `json:"direct,omitempty"`
+	DirectCandidate *Candidate  `json:"directCandidate,omitempty"`
+}
+
+type Result struct {
+	Candidate Candidate
+	Trace     Trace
+}
+
+type EvidenceSink func(context.Context, Evidence) error
+
 type Recognition interface {
 	Name() string
-	Recognize(context.Context, string, string, []byte) (Candidate, error)
+	Recognize(context.Context, string, string, []byte, EvidenceSink) (Result, error)
 }
 
 type Failure struct {
@@ -39,17 +70,24 @@ func (failure *Failure) Error() string { return failure.Code }
 type Fake struct{}
 
 func (Fake) Name() string { return "fake:development" }
-func (Fake) Recognize(_ context.Context, role, _ string, _ []byte) (Candidate, error) {
+func (Fake) Recognize(ctx context.Context, role, _ string, _ []byte, sink EvidenceSink) (Result, error) {
+	var candidate Candidate
 	switch role {
 	case "front":
-		return Candidate{Status: "partial", Language: "Mixed", Confidence: .72, RawText: "FAKE DEMO: Vitamin D3 · 60 softgels", Fields: map[string]any{"productType": "supplement", "productName": "维生素 D3（假识别候选）", "brand": "DEMO", "count": 60, "unit": "粒"}}, nil
+		candidate = Candidate{Status: "partial", Language: "Mixed", Confidence: .72, RawText: "FAKE DEMO: Vitamin D3 · 60 softgels", Fields: map[string]any{"productType": "supplement", "productName": "维生素 D3（假识别候选）", "brand": "DEMO", "count": 60, "unit": "粒"}}
 	case "facts":
-		return Candidate{Status: "partial", Language: "English", Confidence: .68, RawText: "FAKE DEMO: Serving Size 1 Softgel; Vitamin D3 25 μg", Fields: map[string]any{"dose": 1, "times": 1, "ingredientServingQuantity": 1, "ingredientsRaw": "Vitamin D3 25 μg", "ingredientsZh": "维生素 D3 25 μg", "reminder": "09:00"}}, nil
+		candidate = Candidate{Status: "partial", Language: "English", Confidence: .68, RawText: "FAKE DEMO: Serving Size 1 Softgel; Vitamin D3 25 μg", Fields: map[string]any{"dose": 1, "times": 1, "ingredientServingQuantity": 1, "ingredientsRaw": "Vitamin D3 25 μg", "ingredientsZh": "维生素 D3 25 μg", "reminder": "09:00"}}
 	case "expiry":
-		return Candidate{Status: "partial", Language: "Unknown", Confidence: .66, Raw: "FAKE DEMO: EXP 2027-12-31", Date: "2027-12-31"}, nil
+		candidate = Candidate{Status: "partial", Language: "Unknown", Confidence: .66, Raw: "FAKE DEMO: EXP 2027-12-31", Date: "2027-12-31"}
 	default:
-		return Candidate{}, &Failure{Code: "unsupported_role", Message: "不支持的图片角色。"}
+		return Result{}, &Failure{Code: "unsupported_role", Message: "不支持的图片角色。"}
 	}
+	if sink != nil {
+		if err := sink(ctx, Evidence{RawText: candidate.RawText + candidate.Raw, Provider: "fake", Model: "development", DurationMS: 0}); err != nil {
+			return Result{}, err
+		}
+	}
+	return Result{Candidate: candidate, Trace: Trace{Mode: "fake", SelectedRoute: "fake", OCR: &StageTrace{Provider: "fake", Model: "development"}}}, nil
 }
 
 type VisionConfig struct {
@@ -69,7 +107,26 @@ func NewOpenAIVision(cfg VisionConfig) *OpenAIVision {
 }
 func (provider *OpenAIVision) Name() string { return "live:vision:" + provider.cfg.Model }
 
-func (provider *OpenAIVision) Recognize(ctx context.Context, role, mime string, data []byte) (Candidate, error) {
+func (provider *OpenAIVision) Recognize(ctx context.Context, role, mime string, data []byte, sink EvidenceSink) (Result, error) {
+	started := time.Now()
+	candidate, err := provider.recognizeCandidate(ctx, role, mime, data)
+	if err != nil {
+		return Result{}, err
+	}
+	stage := &StageTrace{Provider: "openai-compatible", Model: provider.cfg.Model, DurationMS: time.Since(started).Milliseconds()}
+	visibleText := strings.TrimSpace(candidate.RawText)
+	if role == "expiry" {
+		visibleText = strings.TrimSpace(candidate.Raw)
+	}
+	if sink != nil && visibleText != "" {
+		if err = sink(ctx, Evidence{RawText: truncate(visibleText, 30000), Provider: stage.Provider, Model: stage.Model, DurationMS: stage.DurationMS}); err != nil {
+			return Result{}, &Failure{Code: "evidence_persistence_failed", Message: "识别文本保存失败。", Retryable: true}
+		}
+	}
+	return Result{Candidate: candidate, Trace: Trace{Mode: "direct_vl", SelectedRoute: "direct_vl", Direct: stage}}, nil
+}
+
+func (provider *OpenAIVision) recognizeCandidate(ctx context.Context, role, mime string, data []byte) (Candidate, error) {
 	if provider.cfg.BaseURL == "" || provider.cfg.APIKey == "" || provider.cfg.Model == "" {
 		return Candidate{}, &Failure{Code: "recognition_not_configured", Message: "真实图片识别服务尚未配置。"}
 	}

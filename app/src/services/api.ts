@@ -185,7 +185,10 @@ export function undoIntake(id: string): Promise<{ intake: Intake; product: Produ
 
 export type RecognitionRole = "front" | "facts" | "expiry";
 export type RecognitionCandidate = { status: "recognized" | "partial" | "unrecognized"; language?: string; confidence: number; rawText?: string; raw?: string; date?: string; fields?: Record<string, unknown> };
-export type RecognitionJob = { id: string; role: RecognitionRole; status: "queued" | "running" | "succeeded" | "partial" | "failed" | "cancelled"; provider: string; attempt: number; maxAttempts: number; confidence: number; result?: RecognitionCandidate; errorCode?: string; errorMessage?: string };
+export type RecognitionStage = { provider: string; model: string; durationMs: number };
+export type RecognitionTrace = { mode: "fake" | "ocr_llm" | "direct_vl" | "dual"; selectedRoute: string; ocr?: RecognitionStage; structure?: RecognitionStage; direct?: RecognitionStage; directCandidate?: RecognitionCandidate };
+export type OCREvidence = { rawText: string; provider: string; model: string; durationMs: number; completedAt: string };
+export type RecognitionJob = { id: string; role: RecognitionRole; status: "queued" | "running" | "succeeded" | "partial" | "failed" | "cancelled"; provider: string; attempt: number; maxAttempts: number; confidence: number; result?: RecognitionCandidate; ocrEvidence?: OCREvidence; trace?: RecognitionTrace; errorCode?: string; errorMessage?: string };
 export type RecognitionSet = { id: string; status: "processing" | "awaiting_confirmation" | "confirmed" | "cancelled"; productId?: string; files: Array<{ id: string; role: RecognitionRole; mimeType: string; byteSize: number }>; jobs: RecognitionJob[] };
 
 export async function uploadRecognitionSet(files: Record<RecognitionRole, { path: string; name: string }>): Promise<RecognitionSet> {

@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1600" viewBox="0 0 1200 1600">
+  <rect width="1200" height="1600" fill="#f7f4ed"/>
+  <rect x="90" y="90" width="1020" height="1420" rx="48" fill="#fffefa" stroke="#292824" stroke-width="8"/>
+  <text x="600" y="330" text-anchor="middle" font-family="Arial, sans-serif" font-size="72" fill="#292824">SUPP Q LABS</text>
+  <text x="600" y="650" text-anchor="middle" font-family="Arial, sans-serif" font-weight="700" font-size="132" fill="#292824">VITAMIN C</text>
+  <text x="600" y="790" text-anchor="middle" font-family="Arial, sans-serif" font-size="92" fill="#47735a">500 mg</text>
+  <text x="600" y="1110" text-anchor="middle" font-family="Arial, sans-serif" font-size="68" fill="#292824">DIETARY SUPPLEMENT</text>
+  <text x="600" y="1280" text-anchor="middle" font-family="Arial, sans-serif" font-size="72" fill="#292824">120 TABLETS</text>
+</svg>

@@ -24,8 +24,8 @@ type memoryObjects struct {
 type failedProvider struct{}
 
 func (failedProvider) Name() string { return "live:test-failure" }
-func (failedProvider) Recognize(context.Context, string, string, []byte) (provider.Candidate, error) {
-	return provider.Candidate{}, &provider.Failure{Code: "provider_timeout", Message: "识别超时，图片已保留。"}
+func (failedProvider) Recognize(context.Context, string, string, []byte, provider.EvidenceSink) (provider.Result, error) {
+	return provider.Result{}, &provider.Failure{Code: "provider_timeout", Message: "识别超时，图片已保留。"}
 }
 
 func (store *memoryObjects) Put(_ context.Context, key, _ string, data []byte) error {
@@ -124,7 +124,7 @@ func TestRecognitionPersistenceWorkerConfirmationAndIsolation(t *testing.T) {
 		t.Fatalf("unexpected status %q", set.Status)
 	}
 	for _, job := range set.Jobs {
-		if job.Status != "partial" || job.Provider != "fake:development" || job.Result == nil {
+		if job.Status != "partial" || job.Provider != "fake:development" || job.Result == nil || job.OCREvidence == nil || job.OCREvidence.RawText == "" {
 			t.Fatalf("unexpected job: %+v", job)
 		}
 	}

@@ -5,12 +5,17 @@
 Phase 0, Phase 1 identity, the Phase 2 deterministic core, and the Phase 3
 capture/recognition foundation are implemented and test-backed. Three private
 images persist in S3-compatible storage, recognition jobs persist in
-PostgreSQL, the worker records explicit provider identity, and only an edited
-human-confirmation request creates the product.
+PostgreSQL, and the worker enforces image transcription → OCR evidence commit
+→ Kimi structuring. Provider/model/timing and route traces persist separately
+from the editable final candidate; only human confirmation creates the product.
 
-Do not inflate that statement. The development stack uses `fake:development`;
-the live OpenAI-compatible vision adapter has not received credentials or
-passed the private recognition evaluation set. Restock UI, schedule editing,
+Do not inflate that statement. Compose still defaults to `fake:development` so
+normal local work never spends provider credits. A one-off live run with
+non-private synthetic labels validated Qwen VL transcription and Kimi
+structuring, but no private 30–50-image evaluation set has been authorized or
+passed, so production recognition is not accepted. The configured
+DeepSeek-OCR endpoint returned punctuation garbage and must not be selected
+without a new measured result. Restock UI, schedule editing,
 Records, AI explanation, reminders, automated browser E2E, account deletion,
 backup, and production deployment are not implemented.
 
@@ -107,19 +112,28 @@ closing the entire Phase 2 product surface.
 - Exactly three private uploads (`front`, `facts`, `expiry`), content-signature
   validation, opaque keys, authorized file reads, and demo-object cleanup.
 - Persisted PostgreSQL jobs with claim leases, attempts, exponential backoff,
-  provider identity, candidate/error payloads, retry, and retained failures.
-- Explicit `fake:development` provider and an OpenAI-compatible live vision
-  adapter. Production configuration rejects fake or incomplete live settings.
+  provider identity, candidate/error payloads, retry, retained failures, OCR
+  evidence, and per-stage traces.
+- Explicit `fake:development`, OpenAI-compatible direct vision, and
+  evidence-first providers. `ocr_llm` persists plain text before Kimi;
+  `direct_vl` is a single-call diagnostic that still persists returned visible
+  text; `dual` records both routes and costs roughly twice as much. Production
+  configuration rejects fake or incomplete stage settings.
 - H5 choose/capture/status/retry/manual/confirm flow. Recognition candidates
-  are editable; confirmation is idempotent and is the only recognition path
-  that creates a product.
+  and saved OCR evidence are reviewable; confirmation is idempotent and is the
+  only recognition path that creates a product.
 
 Acceptance passed in Go unit and temporary-schema integration tests plus live
 proxied HTTP against SeaweedFS. Provider failure preserves images, cross-tenant
 set/file reads are hidden, and unconfirmed candidates never create products.
 
-Still required before calling Phase 3 production-ready: configure and verify a
-real provider, run the 30–50-image private evaluation set, implement the
+Live synthetic acceptance on 2026-08-02 verified Qwen VL → persisted text →
+Kimi for front/facts/expiry, including 120 tablets, Vitamin C 500 mg, and
+2027-03-31. This proves provider connectivity and ordering only.
+
+Still required before calling Phase 3 production-ready: run an explicitly
+authorized 30–50-image private evaluation set and set acceptance thresholds,
+implement the
 non-H5 file-upload adapter, add automated browser E2E, and add an orphan-object
 reconciliation job for the rare object-write/database-failure window.
 
@@ -143,6 +157,12 @@ reconciliation job for the rare object-write/database-failure window.
 - The worker recognition queue is real. `fake:development` proves orchestration,
   persistence, retry, and confirmation semantics only; it proves nothing about
   OCR accuracy or live provider connectivity.
+- Never copy legacy secrets into tracked files. For the accepted development
+  live route, map the existing Qwen VL base/key/model into the `SUPPQ_OCR_*`
+  transcription variables and Kimi into `SUPPQ_STRUCTURE_*`. Keep
+  `SUPPQ_RECOGNITION_MODE=ocr_llm` unless running a bounded cost-approved dual
+  evaluation. `SUPPQ_OCR_MODEL=deepseek-ai/DeepSeek-OCR` is currently a known
+  failing configuration in this environment.
 - SeaweedFS is a replaceable local S3 sandbox. Production remains COS or OSS.
 - The CI file becomes active only after `uni/` is a repository root.
 

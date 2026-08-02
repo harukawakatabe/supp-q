@@ -14,7 +14,7 @@
 | LLM | explicit fake or live test provider | live provider; core flow remains independent |
 | HTTPS | optional localhost | mandatory |
 | Sessions | HttpOnly, SameSite=Lax over local HTTP | Secure, HttpOnly, SameSite=Lax and rotation |
-| Data | isolated identities; supplement cards still preview-only | real user data after domain phases |
+| Data | isolated identities; real domain and recognition records | tenant-scoped real user data |
 | Logs | console JSON | retained structured logs and alerts |
 | Monitoring | local health output | API, worker, DB, queue, storage, provider metrics |
 | Backup | disposable | scheduled encrypted backup and restore drill |
@@ -57,6 +57,12 @@ Secrets live outside the Git checkout in a root-readable environment file, conta
 - Mail capture instead of real delivery.
 - Local HTTP instead of production HTTPS.
 - A committed development-only HMAC pepper instead of a secret-manager value.
+
+The local recognition chain is intentionally useful for workflow verification,
+not accuracy claims: `fake:development` always returns visibly labelled,
+non-final candidates. Production startup rejects that provider and requires an
+OpenAI-compatible base URL, model, and API key. Those values configure transport
+only; production acceptance additionally requires the private evaluation set.
 
 ## Behavior differences that are forbidden
 

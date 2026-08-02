@@ -5,14 +5,17 @@ recognition, scheduling, intake, inventory, and reminder service.
 
 ## Current status
 
-Phase 0, Phase 1 identity, and the Phase 2 deterministic core are implemented
-and verified locally. The H5 now reads tenant-scoped products, three-layer
-schedules, batch inventory, Today progress, FEFO intake allocation, and exact
-undo from PostgreSQL. New demo sessions receive isolated sample products.
+Phase 0, Phase 1 identity, the Phase 2 deterministic core, and the Phase 3
+capture/recognition foundation are implemented and verified locally. The H5
+can persist three private label images, poll durable recognition jobs, expose
+explicitly fake development candidates, and create a product only after human
+review. New demo sessions receive isolated sample products.
 
-Nothing is deployed to production. Recognition, AI, reminders, records and
-restock UI, storage cleanup, production email, automated browser E2E, backups,
-and production deployment remain unimplemented.
+Nothing is deployed to production. The live vision adapter exists but has no
+configured provider credentials and has not passed a private evaluation set;
+therefore live OCR/LLM recognition is not a verified capability. AI explanation,
+reminders, records and restock UI, production email, automated browser E2E,
+backups, and production deployment remain unimplemented.
 
 ## Start locally
 

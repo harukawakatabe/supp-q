@@ -15,6 +15,7 @@ import (
 
 	"suppq.local/server/internal/catalog"
 	"suppq.local/server/internal/identity"
+	"suppq.local/server/internal/recognition"
 )
 
 type DatabaseChecker interface {
@@ -28,6 +29,7 @@ type Dependencies struct {
 	Version       string
 	Identity      *identity.Service
 	Catalog       *catalog.Service
+	Recognition   *recognition.Service
 	SessionCookie string
 	CookieSecure  bool
 }
@@ -83,6 +85,9 @@ func New(deps Dependencies) http.Handler {
 	}
 	if deps.Identity != nil && deps.Catalog != nil {
 		registerCatalogRoutes(mux, deps)
+	}
+	if deps.Identity != nil && deps.Recognition != nil {
+		registerRecognitionRoutes(mux, deps)
 	}
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		response := errorResponse{}
@@ -205,6 +210,103 @@ func registerCatalogRoutes(mux *http.ServeMux, deps Dependencies) {
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"intake": intake, "product": product})
+	})
+}
+
+func registerRecognitionRoutes(mux *http.ServeMux, deps Dependencies) {
+	mux.HandleFunc("POST /api/v1/recognition/sets", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := catalogActor(w, r, deps)
+		if !ok {
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, 31<<20)
+		if err := r.ParseMultipartForm(31 << 20); err != nil {
+			writeApplicationError(w, r, deps.Logger, recognition.NewHTTPError("invalid_upload", "上传内容无效或超过 30 MB。"))
+			return
+		}
+		defer r.MultipartForm.RemoveAll()
+		if len(r.MultipartForm.File) != 3 || len(r.MultipartForm.File["front"]) != 1 || len(r.MultipartForm.File["facts"]) != 1 || len(r.MultipartForm.File["expiry"]) != 1 {
+			writeApplicationError(w, r, deps.Logger, recognition.NewHTTPError("invalid_upload", "必须且只能提供正面、成分表和有效期三张图片。"))
+			return
+		}
+		uploads := make([]recognition.Upload, 0, 3)
+		for _, role := range []string{"front", "facts", "expiry"} {
+			file, header, err := r.FormFile(role)
+			if err != nil {
+				writeApplicationError(w, r, deps.Logger, recognition.NewHTTPError("invalid_upload", "必须同时提供正面、成分表和有效期三张图片。"))
+				return
+			}
+			data, readErr := io.ReadAll(io.LimitReader(file, (10<<20)+1))
+			_ = file.Close()
+			if readErr != nil {
+				writeApplicationError(w, r, deps.Logger, recognition.NewHTTPError("invalid_upload", "图片读取失败。"))
+				return
+			}
+			uploads = append(uploads, recognition.Upload{Role: role, Name: header.Filename, DeclaredMIME: header.Header.Get("Content-Type"), Data: data})
+		}
+		created, err := deps.Recognition.CreateSet(r.Context(), recognition.Scope{UserID: actor.UserID, WorkspaceID: actor.WorkspaceID}, uploads)
+		if err != nil {
+			writeApplicationError(w, r, deps.Logger, err)
+			return
+		}
+		writeJSON(w, http.StatusAccepted, created)
+	})
+	mux.HandleFunc("GET /api/v1/recognition/sets/{id}", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := catalogActor(w, r, deps)
+		if !ok {
+			return
+		}
+		item, err := deps.Recognition.GetSet(r.Context(), recognition.Scope{UserID: actor.UserID, WorkspaceID: actor.WorkspaceID}, r.PathValue("id"))
+		if err != nil {
+			writeApplicationError(w, r, deps.Logger, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, item)
+	})
+	mux.HandleFunc("POST /api/v1/recognition/jobs/{id}/retry", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := catalogActor(w, r, deps)
+		if !ok {
+			return
+		}
+		item, err := deps.Recognition.RetryJob(r.Context(), recognition.Scope{UserID: actor.UserID, WorkspaceID: actor.WorkspaceID}, r.PathValue("id"))
+		if err != nil {
+			writeApplicationError(w, r, deps.Logger, err)
+			return
+		}
+		writeJSON(w, http.StatusAccepted, item)
+	})
+	mux.HandleFunc("POST /api/v1/recognition/sets/{id}/confirm", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := catalogActor(w, r, deps)
+		if !ok {
+			return
+		}
+		var body catalog.CreateProductInput
+		if err := readJSON(r, &body); err != nil {
+			writeApplicationError(w, r, deps.Logger, err)
+			return
+		}
+		product, err := deps.Recognition.Confirm(r.Context(), recognition.Scope{UserID: actor.UserID, WorkspaceID: actor.WorkspaceID}, r.PathValue("id"), body)
+		if err != nil {
+			writeApplicationError(w, r, deps.Logger, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, product)
+	})
+	mux.HandleFunc("GET /api/v1/files/{id}", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := catalogActor(w, r, deps)
+		if !ok {
+			return
+		}
+		mimeType, data, err := deps.Recognition.GetFile(r.Context(), recognition.Scope{UserID: actor.UserID, WorkspaceID: actor.WorkspaceID}, r.PathValue("id"))
+		if err != nil {
+			writeApplicationError(w, r, deps.Logger, err)
+			return
+		}
+		w.Header().Set("Content-Type", mimeType)
+		w.Header().Set("Cache-Control", "private, no-store")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(data)
 	})
 }
 
@@ -439,6 +541,22 @@ func writeApplicationError(w http.ResponseWriter, r *http.Request, logger *slog.
 			status = http.StatusConflict
 		case "invalid_product", "invalid_schedule", "invalid_batch", "invalid_ingredient", "invalid_intake", "invalid_date":
 			status = http.StatusBadRequest
+		}
+	}
+	var recognitionErr *recognition.Error
+	if errors.As(err, &recognitionErr) {
+		code, message = recognitionErr.Code, recognitionErr.Message
+		switch code {
+		case "resource_not_found":
+			status = http.StatusNotFound
+		case "recognition_processing":
+			status = http.StatusConflict
+		case "recognition_cancelled":
+			status = http.StatusGone
+		case "invalid_upload":
+			status = http.StatusBadRequest
+		case "storage_unavailable":
+			status = http.StatusServiceUnavailable
 		}
 	}
 	if status >= 500 {

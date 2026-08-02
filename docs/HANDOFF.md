@@ -2,15 +2,17 @@
 
 ## Current truth
 
-Phase 0, Phase 1 identity, and the Phase 2 deterministic core are implemented
-and test-backed. Products, ingredients, three-layer schedules, day-cycle
-history, batch inventory, Today progress, FEFO intake allocation, exact undo,
-and isolated demo seed data persist in PostgreSQL and are exposed to the H5.
+Phase 0, Phase 1 identity, the Phase 2 deterministic core, and the Phase 3
+capture/recognition foundation are implemented and test-backed. Three private
+images persist in S3-compatible storage, recognition jobs persist in
+PostgreSQL, the worker records explicit provider identity, and only an edited
+human-confirmation request creates the product.
 
-Do not inflate that statement. Restock UI, schedule editing/version creation,
-Records, recognition, AI, reminders, storage cleanup, automated browser E2E,
-backup, and production deployment are not implemented. Today is real domain
-data now; there are no static fallback cards.
+Do not inflate that statement. The development stack uses `fake:development`;
+the live OpenAI-compatible vision adapter has not received credentials or
+passed the private recognition evaluation set. Restock UI, schedule editing,
+Records, AI explanation, reminders, automated browser E2E, account deletion,
+backup, and production deployment are not implemented.
 
 ## Read first
 
@@ -100,15 +102,26 @@ undo, Cabinet, and Add Product. Still add schedule editing/version writes,
 restock and Records surfaces, automated browser E2E, and a desktop pass before
 closing the entire Phase 2 product surface.
 
-### Phase 3: capture and recognition
+### Phase 3 foundation: implemented locally
 
-- Private upload and persisted jobs.
-- Explicit fake adapters plus live adapters for the existing vision-provider
-  and Kimi direction.
-- Retry, timeout, failure retention, manual entry, and confirmation UI.
+- Exactly three private uploads (`front`, `facts`, `expiry`), content-signature
+  validation, opaque keys, authorized file reads, and demo-object cleanup.
+- Persisted PostgreSQL jobs with claim leases, attempts, exponential backoff,
+  provider identity, candidate/error payloads, retry, and retained failures.
+- Explicit `fake:development` provider and an OpenAI-compatible live vision
+  adapter. Production configuration rejects fake or incomplete live settings.
+- H5 choose/capture/status/retry/manual/confirm flow. Recognition candidates
+  are editable; confirmation is idempotent and is the only recognition path
+  that creates a product.
 
-Acceptance: provider failure preserves user input and never creates an
-unconfirmed final plan.
+Acceptance passed in Go unit and temporary-schema integration tests plus live
+proxied HTTP against SeaweedFS. Provider failure preserves images, cross-tenant
+set/file reads are hidden, and unconfirmed candidates never create products.
+
+Still required before calling Phase 3 production-ready: configure and verify a
+real provider, run the 30–50-image private evaluation set, implement the
+non-H5 file-upload adapter, add automated browser E2E, and add an orphan-object
+reconciliation job for the rare object-write/database-failure window.
 
 ### Phase 4: H5 main path
 
@@ -127,8 +140,9 @@ unconfirmed final plan.
   dependency choice.
 - Sass legacy API warnings are real debt but do not currently fail builds.
 - Liveness never proves database health; use readiness for PostgreSQL.
-- Worker `jobs: not_implemented` is intentional and must not be presented as a
-  working domain queue. Demo cleanup is the only active worker job.
+- The worker recognition queue is real. `fake:development` proves orchestration,
+  persistence, retry, and confirmation semantics only; it proves nothing about
+  OCR accuracy or live provider connectivity.
 - SeaweedFS is a replaceable local S3 sandbox. Production remains COS or OSS.
 - The CI file becomes active only after `uni/` is a repository root.
 

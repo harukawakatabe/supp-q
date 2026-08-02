@@ -29,7 +29,8 @@
 - Every private query filters by effective user and workspace.
 - Resource IDs are opaque but never treated as authorization.
 - Admin checks are separate from authentication.
-- Cross-user access has integration and E2E coverage.
+- Cross-user product, recognition-set, job, and file access has integration
+  coverage. Automated browser E2E authorization coverage remains pending.
 
 ## Uploads
 
@@ -39,6 +40,11 @@
 - Strip unsafe filenames and generate opaque object keys.
 - Clean failed, abandoned, expired-demo, and deleted-account objects.
 
+Phase 3 currently enforces signature/MIME/size validation, private bucket
+storage, opaque names, tenant-scoped no-store reads, and expired-demo cleanup.
+Account deletion and a reconciler for rare pre-transaction object orphans are
+still required; the checklist item above is not yet fully closed.
+
 ## AI and OCR
 
 - Keys remain server-side.
@@ -47,6 +53,12 @@
 - OCR candidates require confirmation.
 - LLM cannot mutate deterministic data directly.
 - Fake providers are visibly identified and forbidden in production acceptance.
+
+The live adapter treats label text as untrusted input, requests structured JSON,
+caps response size, normalizes confidence/status, and rejects an expiry date
+without matching visible evidence. It has not been configured against a real
+provider or accuracy-tested, so these guards are implementation evidence, not
+live OCR acceptance.
 
 ## Health-context data
 

@@ -13,7 +13,7 @@ Status values: `not selected`, `selected`, `configured`, `verified`.
 | PostgreSQL | verified 17.10 container | server container initially or managed DB later | local verified; production not selected |
 | Object storage | verified SeaweedFS S3 sandbox | private COS or OSS bucket | local verified; production not selected |
 | Email | verified Mailpit 1.30.0 | verified SMTP/email API provider | local verified; production not selected |
-| OCR/vision | fake or live test adapter | server-side provider secret | existing provider intended, exact config pending |
+| OCR/vision | verified Fake workflow; unverified live adapter | server-side provider secret | provider/model/key not supplied |
 | LLM | fake or live test adapter | server-side provider secret | existing Kimi intended, exact config pending |
 | Monitoring | local logs | selected logging/alert destination | not selected |
 | Backup target | disposable | external bucket or separate backup destination | not selected |
@@ -71,6 +71,14 @@ Do not paste secret values into project documents.
 - input size limits.
 - timeout and quota.
 - data-retention terms recorded by the owner.
+
+Place the local values only in `uni/server/.env.local` (ignored) using
+`SUPPQ_RECOGNITION_PROVIDER=openai_vision`,
+`SUPPQ_RECOGNITION_BASE_URL`, `SUPPQ_RECOGNITION_MODEL`, and
+`SUPPQ_RECOGNITION_API_KEY`. Production places the same variable names in the
+server/worker secret environment, never in the H5 build. The API key is needed
+by the worker, not by the client. Provider selection is incomplete until the
+private 30–50-image evaluation and timeout/failure tests pass.
 
 ### LLM
 

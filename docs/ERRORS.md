@@ -21,7 +21,7 @@ Every error response uses:
 | `unauthorized` | 401 | No active registered session. |
 | `forbidden` | 403 | Authenticated actor lacks the admin role. |
 | `invitation_not_found` | 404 | Revocation target does not exist or is already revoked. |
-| `resource_not_found` | 404 | Tenant-scoped product, batch, or intake is absent; cross-tenant resources are intentionally indistinguishable. |
+| `resource_not_found` | 404 | Tenant-scoped product, batch, intake, recognition set/job, or file is absent; cross-tenant resources are intentionally indistinguishable. |
 | `invalid_product` | 400 | Product fields violate the deterministic domain contract. |
 | `invalid_schedule` | 400 | Date, weekday, reminder, or cycle rules are invalid. |
 | `invalid_batch` | 400 | Batch quantity, price, or expiry is invalid. |
@@ -29,9 +29,20 @@ Every error response uses:
 | `invalid_intake` | 400 | Intake date, time, source, quantity, or idempotency key is invalid. |
 | `invalid_date` | 400 | Today query date is not `YYYY-MM-DD`. |
 | `insufficient_inventory` | 409 | Full requested intake cannot be allocated; no partial mutation is committed. |
+| `invalid_upload` | 400 | Exactly three valid JPEG, PNG, or WebP label images were not supplied within the size limits. |
+| `recognition_processing` | 409 | Confirmation was attempted before all recognition jobs reached a terminal state. |
+| `recognition_cancelled` | 410 | A cancelled recognition set cannot be confirmed. |
 | `rate_limited` | 429 | Email challenge request limit was reached. |
 | `email_delivery_failed` | 502 | SMTP delivery failed; the challenge was invalidated. |
+| `storage_unavailable` | 503 | Private object storage could not persist or retrieve an upload. |
 | `internal_error` | 500 | Unexpected server or database failure. |
 
 Messages are Chinese user-facing text. Logs use request IDs and retain the
 internal error without returning it to the client.
+
+Recognition job failures are persisted as job state rather than returned as
+the upload request's HTTP error. Current codes include
+`recognition_not_configured`, `provider_unavailable`, `provider_http_error`,
+`provider_invalid_response`, and `storage_unavailable`. Retryable failures are
+requeued up to the stored `maxAttempts`; terminal failures retain the image and
+remain manually confirmable.

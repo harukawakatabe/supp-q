@@ -182,3 +182,38 @@ export async function createIntake(input: { productId: string; date: string; tim
 export function undoIntake(id: string): Promise<{ intake: Intake; product: Product }> {
   return apiRequest(`/intakes/${encodeURIComponent(id)}`, "DELETE");
 }
+
+export type RecognitionRole = "front" | "facts" | "expiry";
+export type RecognitionCandidate = { status: "recognized" | "partial" | "unrecognized"; language?: string; confidence: number; rawText?: string; raw?: string; date?: string; fields?: Record<string, unknown> };
+export type RecognitionJob = { id: string; role: RecognitionRole; status: "queued" | "running" | "succeeded" | "partial" | "failed" | "cancelled"; provider: string; attempt: number; maxAttempts: number; confidence: number; result?: RecognitionCandidate; errorCode?: string; errorMessage?: string };
+export type RecognitionSet = { id: string; status: "processing" | "awaiting_confirmation" | "confirmed" | "cancelled"; productId?: string; files: Array<{ id: string; role: RecognitionRole; mimeType: string; byteSize: number }>; jobs: RecognitionJob[] };
+
+export async function uploadRecognitionSet(files: Record<RecognitionRole, { path: string; name: string }>): Promise<RecognitionSet> {
+  // #ifdef H5
+  const form = new FormData();
+  for (const role of ["front", "facts", "expiry"] as RecognitionRole[]) {
+    const response = await fetch(files[role].path);
+    const blob = await response.blob();
+    form.append(role, blob, files[role].name || `${role}.jpg`);
+  }
+  const response = await fetch(`${publicApiBase}/api/v1/recognition/sets`, { method: "POST", body: form, credentials: "include" });
+  const payload = await response.json() as RecognitionSet & { error?: { code?: string; message?: string } };
+  if (!response.ok) throw new APIError(response.status, payload.error?.code ?? "upload_failed", payload.error?.message ?? "图片上传失败。");
+  return payload;
+  // #endif
+  // #ifndef H5
+  throw new APIError(501, "platform_upload_pending", "小程序上传适配器尚未实现，请先使用 H5。");
+  // #endif
+}
+
+export function getRecognitionSet(id: string): Promise<RecognitionSet> {
+  return apiRequest(`/recognition/sets/${encodeURIComponent(id)}`);
+}
+
+export function retryRecognitionJob(id: string): Promise<RecognitionSet> {
+  return apiRequest(`/recognition/jobs/${encodeURIComponent(id)}/retry`, "POST");
+}
+
+export function confirmRecognitionSet(id: string, product: object): Promise<Product> {
+  return apiRequest(`/recognition/sets/${encodeURIComponent(id)}/confirm`, "POST", product);
+}

@@ -38,7 +38,7 @@ anonymous demo
 - restart persistence
 - mobile and desktop H5 browser paths
 
-## Current Phase 1–2 evidence
+## Current Phase 1–3 evidence
 
 Implemented automated coverage:
 
@@ -52,6 +52,10 @@ Implemented automated coverage:
   projected finish, latest start, and fixed-point quantity arithmetic
 - FEFO split allocation, atomic insufficient-stock rejection, idempotent intake,
   exact repeat-safe undo, Today projection, and cross-tenant resource hiding
+- three-role private upload persistence and tenant-scoped set/file reads
+- persisted recognition job claiming, explicit Fake provenance, retained
+  provider failures, manual fallback, retry, and idempotent confirmation
+- proof that recognition candidates create no product before human confirmation
 
 Manually exercised against the real local stack:
 
@@ -60,11 +64,15 @@ Manually exercised against the real local stack:
 - email-bound wrong-email rejection
 - mobile H5 demo, password login, registered workspace, logout, and new demo
 - role-gated invitation administration page
+- proxied multipart upload to private local object storage, three worker job
+  completions, authorized byte-for-byte file delivery, unauthenticated 401, and
+  repeat-safe confirmation returning one product
 
-This is not the complete V1 acceptance gate. Recognition, object deletion,
-automated browser E2E, restart persistence, backup restore, and production-like
-provider behavior remain untestable until their implementation phases. Product
-authorization and deterministic domains now have direct integration evidence.
+This is not the complete V1 acceptance gate. Expired-demo object cleanup is
+wired but account deletion, automated browser E2E, restart persistence, backup
+restore, and production-like provider behavior remain unaccepted. The Fake
+provider validates orchestration and safety boundaries only; it is not OCR
+accuracy evidence.
 
 ## Recognition evaluation
 

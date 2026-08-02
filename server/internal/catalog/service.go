@@ -85,6 +85,7 @@ type CreateProductInput struct {
 	Schedule                  ScheduleInput     `json:"schedule"`
 	OpeningBatch              BatchInput        `json:"openingBatch"`
 	Ingredients               []IngredientInput `json:"ingredients"`
+	SourceRecognitionSetID    string            `json:"-"`
 }
 
 type ScheduleView struct {
@@ -307,6 +308,11 @@ func (service *Service) CreateProduct(ctx context.Context, scope Scope, input Cr
 	defer tx.Rollback(ctx)
 	id, err := service.createProductTx(ctx, tx, scope, normalized, schedule, now)
 	if err != nil {
+		var pgErr *pgconn.PgError
+		if input.SourceRecognitionSetID != "" && errors.As(err, &pgErr) && pgErr.ConstraintName == "products_source_recognition_set_uidx" {
+			_ = tx.Rollback(ctx)
+			return service.GetProductByRecognitionSet(ctx, scope, input.SourceRecognitionSetID)
+		}
 		return Product{}, err
 	}
 	if err = tx.Commit(ctx); err != nil {
@@ -331,7 +337,11 @@ func (service *Service) createProductTx(ctx context.Context, tx pgx.Tx, scope Sc
 	dose, _ := core.QuantityFromFloat(input.DoseQuantity)
 	serving, _ := core.QuantityFromFloat(input.IngredientServingQuantity)
 	opening, _ := core.QuantityFromFloat(input.OpeningBatch.Quantity)
-	if _, err = tx.Exec(ctx, `INSERT INTO products (id,user_id,workspace_id,name,brand,product_type,status,unit,dose_quantity,dose_times_per_day,ingredient_serving_quantity,with_food,restock_threshold_days,expiry_reminder_days,created_at,updated_at) VALUES ($1,$2,$3,$4,$5,$6,'active',$7,$8,$9,$10,$11,$12,$13,$14,$14)`, productID, scope.UserID, scope.WorkspaceID, input.Name, input.Brand, input.ProductType, input.Unit, dose.DatabaseString(), input.DoseTimesPerDay, serving.DatabaseString(), input.WithFood, input.RestockThresholdDays, input.ExpiryReminderDays, now); err != nil {
+	var sourceSet any
+	if input.SourceRecognitionSetID != "" {
+		sourceSet = input.SourceRecognitionSetID
+	}
+	if _, err = tx.Exec(ctx, `INSERT INTO products (id,user_id,workspace_id,name,brand,product_type,status,unit,dose_quantity,dose_times_per_day,ingredient_serving_quantity,with_food,restock_threshold_days,expiry_reminder_days,source_recognition_set_id,created_at,updated_at) VALUES ($1,$2,$3,$4,$5,$6,'active',$7,$8,$9,$10,$11,$12,$13,$14,$15,$15)`, productID, scope.UserID, scope.WorkspaceID, input.Name, input.Brand, input.ProductType, input.Unit, dose.DatabaseString(), input.DoseTimesPerDay, serving.DatabaseString(), input.WithFood, input.RestockThresholdDays, input.ExpiryReminderDays, sourceSet, now); err != nil {
 		return "", err
 	}
 	weekdays := make([]int16, len(schedule.Weekdays))
@@ -403,6 +413,18 @@ func normalizeIngredientKey(key, name string) string {
 
 func (service *Service) GetProduct(ctx context.Context, scope Scope, id string) (Product, error) {
 	return loadProduct(ctx, service.pool, scope, id, service.now())
+}
+
+func (service *Service) GetProductByRecognitionSet(ctx context.Context, scope Scope, setID string) (Product, error) {
+	var id string
+	err := service.pool.QueryRow(ctx, `SELECT id FROM products WHERE source_recognition_set_id=$1 AND user_id=$2 AND workspace_id=$3`, setID, scope.UserID, scope.WorkspaceID).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Product{}, ErrNotFound
+	}
+	if err != nil {
+		return Product{}, err
+	}
+	return service.GetProduct(ctx, scope, id)
 }
 func (service *Service) ListProducts(ctx context.Context, scope Scope) ([]Product, error) {
 	rows, err := service.pool.Query(ctx, `SELECT id FROM products WHERE user_id=$1 AND workspace_id=$2 AND status<>'archived' ORDER BY created_at DESC LIMIT 100`, scope.UserID, scope.WorkspaceID)

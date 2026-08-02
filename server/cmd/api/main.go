@@ -16,6 +16,8 @@ import (
 	"suppq.local/server/internal/httpapi"
 	"suppq.local/server/internal/identity"
 	"suppq.local/server/internal/mailer"
+	"suppq.local/server/internal/recognition"
+	"suppq.local/server/internal/storage"
 )
 
 var version = "dev"
@@ -37,7 +39,17 @@ func main() {
 		os.Exit(1)
 	}
 	defer pool.Close()
+	objectStore, err := storage.NewS3(storage.S3Config{Endpoint: cfg.ObjectEndpoint, AccessKey: cfg.ObjectAccessKey, SecretKey: cfg.ObjectSecretKey, Bucket: cfg.ObjectBucket, Region: cfg.ObjectRegion, Secure: cfg.ObjectSecure})
+	if err != nil {
+		logger.Error("object storage configuration invalid", "error", err)
+		os.Exit(1)
+	}
+	if err = objectStore.EnsureBucket(rootCtx, cfg.Environment != "production"); err != nil {
+		logger.Error("object storage unavailable", "error", err)
+		os.Exit(1)
+	}
 	catalogService := catalog.New(pool)
+	recognitionService := recognition.New(pool, objectStore, catalogService)
 	identityService := identity.New(pool, mailer.SMTP{
 		Host: cfg.SMTPHost, Port: cfg.SMTPPort, From: cfg.SMTPFrom,
 		Username: cfg.SMTPUsername, Password: cfg.SMTPPassword,
@@ -50,6 +62,7 @@ func main() {
 		Version:       version,
 		Identity:      identityService,
 		Catalog:       catalogService,
+		Recognition:   recognitionService,
 		SessionCookie: cfg.SessionCookie,
 		CookieSecure:  cfg.CookieSecure,
 	})

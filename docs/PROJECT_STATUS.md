@@ -13,7 +13,7 @@ Nothing in `uni/` is deployed or serving real users yet.
 - Notion-like warm-neutral Today shell with explicit Phase 0 preview labeling.
 - Responsive mobile bottom navigation and desktop sidebar shell.
 - Client API health request with online/offline state.
-- H5 and `mp-weixin` builds, TypeScript check, and four client scaffold tests.
+- H5 and `mp-weixin` builds, TypeScript check, and six client scaffold tests.
 - Go 1.26.5 module with independent API, worker, and admin commands.
 - Server-generated request IDs, JSON logs, strict configured-origin CORS,
   liveness, and PostgreSQL-backed readiness.
@@ -50,6 +50,22 @@ Nothing in `uni/` is deployed or serving real users yet.
 - Real H5 Today, Cabinet, and Add Product pages backed by the Phase 2 API. The
   previous static preview cards were removed.
 - OpenAPI 0.3 domain contract and stable Phase 2 error codes.
+- Append-only Phase 3 schema for private file metadata, three-role recognition
+  sets, durable jobs, attempts, leases, result provenance, and idempotent
+  product linkage.
+- S3-compatible private object adapter, validated JPEG/PNG/WebP uploads (10 MB
+  each), opaque object keys, tenant-scoped no-store file delivery, and worker
+  cleanup before expired-demo database deletion.
+- PostgreSQL recognition worker with `SKIP LOCKED` claiming, two-minute leases,
+  bounded attempts, exponential retry, retained failures, and explicit
+  provider/model identity.
+- Explicit `fake:development` candidate provider and an OpenAI-compatible live
+  vision adapter. Production configuration rejects fake or incomplete live
+  provider settings; no live provider has been configured or accepted.
+- H5 capture path for front, facts, and expiry images; persisted job polling,
+  per-job retry, manual fallback, visible Fake banner, editable prefill, and an
+  idempotent human-confirmation boundary before product creation.
+- OpenAPI 0.4 recognition contract and stable Phase 3 error codes.
 
 ## Acceptance evidence on 2026-08-01 and 2026-08-02
 
@@ -102,6 +118,24 @@ Nothing in `uni/` is deployed or serving real users yet.
   intake and back to 0/3 on undo, displayed the real Cabinet batches and risk,
   opened the Add Product form, had no horizontal overflow, and logged no
   browser console warnings or errors.
+- Phase 3 provider unit tests verify explicit Fake provenance, non-final Fake
+  status, response normalization, and refusal to accept an expiry date without
+  matching visible evidence.
+- Phase 3 temporary-schema integration test persists three images and jobs,
+  proves no unconfirmed product exists, hides sets/files/products across
+  tenants, runs all jobs, confirms idempotently, retains provider failures, and
+  requeues a failed job without deleting its image.
+- Rebuilt local stack applied migrations `202608020002` and `202608020003`.
+  Live proxied multipart HTTP persisted three 26,247-byte JPEG files, the
+  worker completed three jobs
+  as `partial` with provider `fake:development`, and an authorized file read
+  returned the original JPEG while a request without a session returned 401.
+- Live confirmation created product `78e367af-eee5-413a-942f-bf77e29f90c5` only
+  after an edited confirmation request; repeating confirmation returned the
+  same product, and the recognition set records that product ID.
+- Rebuilt H5 browser verification exposed separate three-image and manual-entry
+  paths, explicit private/Fake-provider copy, all three required image roles,
+  and no browser console warnings or errors.
 
 ## In progress
 
@@ -109,11 +143,13 @@ Nothing in `uni/` is deployed or serving real users yet.
   and a Records page.
 - Adding automated browser E2E and a repeatable restart-persistence check; the
   current H5 acceptance is manual browser evidence.
+- Selecting/configuring the real vision provider and building a private
+  30–50-image recognition evaluation set. Adapter code alone is not provider
+  acceptance.
+- Adding the uni-app non-H5 upload adapter and object-orphan reconciliation.
 
 ## Not started
 
-- Upload and recognition job implementation.
-- OCR/vision and Kimi live/fake provider adapters.
 - Records, restock, product-detail/edit, and account-deletion H5 interactions.
 - Application reminders.
 - Automated browser E2E suites (domain authorization has PostgreSQL integration coverage).
@@ -148,5 +184,6 @@ Nothing in `uni/` is deployed or serving real users yet.
   access. This was a local environment defect, not an application defect.
 - `net/smtp` negotiates STARTTLS when the server offers it, but production SMTP
   provider credentials and delivery behavior are not configured or accepted.
-- Database demo cleanup is implemented. Storage-object cleanup cannot be wired
-  until Phase 3 creates file records and an object-storage adapter.
+- Database and expired-demo object cleanup are implemented in worker order.
+  Account deletion is still absent, and an orphan-object reconciler is still
+  needed for object writes that succeed before a database transaction fails.

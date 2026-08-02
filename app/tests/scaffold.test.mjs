@@ -27,6 +27,17 @@ test("Today uses the deterministic API instead of preview domain data", async ()
   assert.doesNotMatch(page, /预览任务|不是已实现的服用计划/);
 });
 
+test("Phase 3 Add flow separates fake recognition from confirmed product data", async () => {
+  const page = await readFile(new URL("../src/pages/product/add.vue", import.meta.url), "utf8");
+  const api = await readFile(new URL("../src/services/api.ts", import.meta.url), "utf8");
+  assert.match(page, /正面、成分表、有效期/);
+  assert.match(page, /开发假识别候选，不代表图片真实内容/);
+  assert.match(page, /确认并加入补充柜/);
+  assert.match(page, /ingredientAmount>0/);
+  assert.match(api, /uploadRecognitionSet/);
+  assert.match(api, /confirmRecognitionSet/);
+});
+
 test("authentication UI tells users that demo data is not migrated", async () => {
   const page = await readFile(new URL("../src/pages/auth/index.vue", import.meta.url), "utf8");
   assert.match(page, /演示数据不会迁移/);

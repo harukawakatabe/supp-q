@@ -1,0 +1,228 @@
+package recognition
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net/url"
+	"os"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+	"suppq.local/server/internal/catalog"
+	"suppq.local/server/internal/provider"
+	"suppq.local/server/migrations"
+)
+
+type memoryObjects struct {
+	mu    sync.Mutex
+	items map[string][]byte
+}
+type failedProvider struct{}
+
+func (failedProvider) Name() string { return "live:test-failure" }
+func (failedProvider) Recognize(context.Context, string, string, []byte) (provider.Candidate, error) {
+	return provider.Candidate{}, &provider.Failure{Code: "provider_timeout", Message: "识别超时，图片已保留。"}
+}
+
+func (store *memoryObjects) Put(_ context.Context, key, _ string, data []byte) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	store.items[key] = append([]byte(nil), data...)
+	return nil
+}
+func (store *memoryObjects) Get(_ context.Context, key string) ([]byte, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	data, ok := store.items[key]
+	if !ok {
+		return nil, errors.New("missing object")
+	}
+	return append([]byte(nil), data...), nil
+}
+func (store *memoryObjects) Delete(_ context.Context, key string) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	delete(store.items, key)
+	return nil
+}
+
+func TestRecognitionPersistenceWorkerConfirmationAndIsolation(t *testing.T) {
+	base := os.Getenv("SUPPQ_TEST_DATABASE_URL")
+	if base == "" {
+		t.Skip("SUPPQ_TEST_DATABASE_URL is not set")
+	}
+	ctx := context.Background()
+	adminPool, err := pgxpool.New(ctx, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer adminPool.Close()
+	schema := fmt.Sprintf("suppq_recognition_test_%d", time.Now().UnixNano())
+	if _, err = adminPool.Exec(ctx, `CREATE SCHEMA "`+schema+`"`); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = adminPool.Exec(context.Background(), `DROP SCHEMA IF EXISTS "`+schema+`" CASCADE`) })
+	parsed, err := url.Parse(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	query := parsed.Query()
+	query.Set("search_path", schema)
+	parsed.RawQuery = query.Encode()
+	if err = migrations.Up(ctx, parsed.String()); err != nil {
+		t.Fatal(err)
+	}
+	pool, err := pgxpool.New(ctx, parsed.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	now, _ := time.Parse(time.RFC3339, "2026-08-02T10:00:00Z")
+	owner := createRecognitionOwner(t, ctx, pool, "00000000-0000-4000-8000-000000000101", "00000000-0000-4000-8000-000000000111", now)
+	other := createRecognitionOwner(t, ctx, pool, "00000000-0000-4000-8000-000000000102", "00000000-0000-4000-8000-000000000122", now)
+	objects := &memoryObjects{items: map[string][]byte{}}
+	catalogService := catalog.New(pool)
+	service := New(pool, objects, catalogService)
+	service.now = func() time.Time { return now }
+	image := append([]byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a}, make([]byte, 64)...)
+	set, err := service.CreateSet(ctx, owner, []Upload{{Role: "front", Name: "front.png", DeclaredMIME: "image/png", Data: image}, {Role: "facts", Name: "facts.png", DeclaredMIME: "image/png", Data: image}, {Role: "expiry", Name: "expiry.png", DeclaredMIME: "image/png", Data: image}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if set.Status != "processing" || len(set.Jobs) != 3 || len(objects.items) != 3 {
+		t.Fatalf("unexpected persisted set: %+v objects=%d", set, len(objects.items))
+	}
+	var productCount int
+	if err = pool.QueryRow(ctx, `SELECT count(*) FROM products WHERE user_id=$1`, owner.UserID).Scan(&productCount); err != nil || productCount != 0 {
+		t.Fatal("unconfirmed recognition created a product")
+	}
+	if _, err = service.GetSet(ctx, other, set.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("cross-tenant set access must be hidden, got %v", err)
+	}
+	if _, _, err = service.GetFile(ctx, other, set.Files[0].ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("cross-tenant file access must be hidden, got %v", err)
+	}
+	for range 3 {
+		claimed, runErr := service.RunOne(ctx, provider.Fake{})
+		if runErr != nil || !claimed {
+			t.Fatalf("worker failed: claimed=%v err=%v", claimed, runErr)
+		}
+	}
+	claimed, err := service.RunOne(ctx, provider.Fake{})
+	if err != nil || claimed {
+		t.Fatalf("queue should be empty: %v %v", claimed, err)
+	}
+	set, err = service.GetSet(ctx, owner, set.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if set.Status != "awaiting_confirmation" {
+		t.Fatalf("unexpected status %q", set.Status)
+	}
+	for _, job := range set.Jobs {
+		if job.Status != "partial" || job.Provider != "fake:development" || job.Result == nil {
+			t.Fatalf("unexpected job: %+v", job)
+		}
+	}
+	input := catalog.CreateProductInput{Name: "人工确认 D3", Unit: "粒", DoseQuantity: 1, DoseTimesPerDay: 1, IngredientServingQuantity: 1, RestockThresholdDays: 7, ExpiryReminderDays: 30, Schedule: catalog.ScheduleInput{StartDate: "2026-08-02", Weekdays: []int{0, 1, 2, 3, 4, 5, 6}, ReminderTimes: []string{"09:00"}}, OpeningBatch: catalog.BatchInput{Quantity: 60, ExpiryDate: "2027-12-31", PriceCNY: 99}}
+	product, err := service.Confirm(ctx, owner, set.ID, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if product.Name != "人工确认 D3" || product.CurrentQuantity != 60 {
+		t.Fatalf("unexpected confirmed product: %+v", product)
+	}
+	same, err := service.Confirm(ctx, owner, set.ID, input)
+	if err != nil || same.ID != product.ID {
+		t.Fatal("confirmation must be idempotent")
+	}
+	if _, err = service.catalog.GetProduct(ctx, catalog.Scope(other), product.ID); !errors.Is(err, catalog.ErrNotFound) {
+		t.Fatal("confirmed product leaked across tenant")
+	}
+
+	failedSet, err := service.CreateSet(ctx, owner, []Upload{{Role: "front", Name: "front.png", DeclaredMIME: "image/png", Data: image}, {Role: "facts", Name: "facts.png", DeclaredMIME: "image/png", Data: image}, {Role: "expiry", Name: "expiry.png", DeclaredMIME: "image/png", Data: image}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		claimed, runErr := service.RunOne(ctx, failedProvider{})
+		if runErr != nil || !claimed {
+			t.Fatalf("failure worker path failed: %v %v", claimed, runErr)
+		}
+	}
+	failedSet, err = service.GetSet(ctx, owner, failedSet.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if failedSet.Status != "awaiting_confirmation" {
+		t.Fatalf("failed set must remain confirmable, got %s", failedSet.Status)
+	}
+	for _, job := range failedSet.Jobs {
+		if job.Status != "failed" || job.ErrorCode != "provider_timeout" {
+			t.Fatalf("unexpected retained failure: %+v", job)
+		}
+	}
+	if _, _, err = service.GetFile(ctx, owner, failedSet.Files[0].ID); err != nil {
+		t.Fatalf("provider failure lost upload: %v", err)
+	}
+	retried, err := service.RetryJob(ctx, owner, failedSet.Jobs[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retried.Status != "processing" {
+		t.Fatal("retry did not return set to processing")
+	}
+	claimed, err = service.RunOne(ctx, provider.Fake{})
+	if err != nil || !claimed {
+		t.Fatalf("retry was not processed: %v %v", claimed, err)
+	}
+
+	storageSet, err := service.CreateSet(ctx, owner, []Upload{{Role: "front", Name: "front.png", DeclaredMIME: "image/png", Data: image}, {Role: "facts", Name: "facts.png", DeclaredMIME: "image/png", Data: image}, {Role: "expiry", Name: "expiry.png", DeclaredMIME: "image/png", Data: image}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	objects.mu.Lock()
+	for key := range objects.items {
+		if strings.Contains(key, "/"+storageSet.ID+"/front-") {
+			delete(objects.items, key)
+		}
+	}
+	objects.mu.Unlock()
+	for range 3 {
+		claimed, err = service.RunOne(ctx, provider.Fake{})
+		if err != nil || !claimed {
+			t.Fatalf("storage failure path was not processed: %v %v", claimed, err)
+		}
+	}
+	storageSet, err = service.GetSet(ctx, owner, storageSet.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	storageFailureFound := false
+	for _, job := range storageSet.Jobs {
+		if job.ErrorCode == "storage_unavailable" {
+			storageFailureFound = job.Status == "queued" && job.Attempt == 1
+		}
+	}
+	if !storageFailureFound || storageSet.Status != "processing" {
+		t.Fatalf("retryable storage failure must stay queued with retained metadata: %+v", storageSet)
+	}
+}
+
+func createRecognitionOwner(t *testing.T, ctx context.Context, pool *pgxpool.Pool, userID, workspaceID string, now time.Time) Scope {
+	t.Helper()
+	if _, err := pool.Exec(ctx, `INSERT INTO users (id,kind,status,role,last_activity_at,created_at) VALUES ($1,'registered','active','member',$2,$2)`, userID, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO workspaces (id,owner_user_id,kind,name,last_activity_at,created_at) VALUES ($1,$2,'registered','test',$3,$3)`, workspaceID, userID, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO workspace_members (workspace_id,user_id,role,created_at) VALUES ($1,$2,'owner',$3)`, workspaceID, userID, now); err != nil {
+		t.Fatal(err)
+	}
+	return Scope{UserID: userID, WorkspaceID: workspaceID}
+}

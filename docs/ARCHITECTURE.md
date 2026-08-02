@@ -1,8 +1,9 @@
 # Target Architecture
 
-Status: target design with locally verified Phase 0–2 foundations. Recognition,
-AI, reminder, and production-hardening sections remain target-only unless
-`PROJECT_STATUS.md` says otherwise.
+Status: target design with locally verified Phase 0–3 foundations. Private
+capture, durable recognition jobs, and human confirmation are implemented;
+the live provider, AI explanation, reminder, and production-hardening sections
+remain unverified or target-only unless `PROJECT_STATUS.md` says otherwise.
 
 ## System
 
@@ -163,8 +164,8 @@ static H5 delivery, and API reverse proxy. PostgreSQL remains the durable source
 of truth; production objects live in private Tencent COS or Alibaba OSS; backup
 artifacts live outside the application server.
 
-The locally implemented API surface includes operations, identity, and the
-Phase 2 deterministic domain:
+The locally implemented API surface includes operations, identity, the Phase 2
+deterministic domain, and the Phase 3 capture/confirmation boundary:
 
 ```text
 GET /api/v1/health/live  → process liveness only
@@ -178,11 +179,19 @@ POST /api/v1/products/{id}/batches
 GET /api/v1/today
 POST /api/v1/intakes
 DELETE /api/v1/intakes/{id}
+POST /api/v1/recognition/sets
+GET /api/v1/recognition/sets/{id}
+POST /api/v1/recognition/jobs/{id}/retry
+POST /api/v1/recognition/sets/{id}/confirm
+GET /api/v1/files/{id}
 ```
 
-The worker now deletes due database-backed demo identities and their cascaded
-rows. Product and intake writes are synchronous database transactions; the
-worker does not execute recognition, AI, file, or reminder jobs yet.
+The worker claims recognition jobs with PostgreSQL row locking and leases,
+loads private objects from S3-compatible storage, records provider/model
+identity, retries retryable failures with backoff, and retains failed uploads
+for retry or manual confirmation. It deletes expired demo objects before the
+identity cascade. Product and intake writes remain synchronous transactions;
+AI explanation and reminder jobs are not implemented.
 
 Identity details and the remaining security gaps are recorded in
 `docs/IDENTITY.md`; stable errors are in `docs/ERRORS.md`.

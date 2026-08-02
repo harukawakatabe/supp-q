@@ -1,8 +1,8 @@
 openapi: 3.1.0
 info:
   title: Supp Q API
-  version: 0.3.0
-  description: Phase 2 identity, deterministic product, schedule, batch inventory, and intake contract.
+  version: 0.4.0
+  description: Phase 3 identity, deterministic domain, private uploads, persisted recognition jobs, and human confirmation contract.
 servers:
   - url: /api/v1
 paths:
@@ -170,6 +170,58 @@ paths:
       responses:
         "200": { description: Intake revoked and its recorded allocations restored to the same batches; repeated calls are idempotent }
         "404": { $ref: "#/components/responses/NotFound" }
+  /recognition/sets:
+    post:
+      operationId: createRecognitionSet
+      security: [{ sessionCookie: [] }]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [front, facts, expiry]
+              properties:
+                front: { type: string, format: binary }
+                facts: { type: string, format: binary }
+                expiry: { type: string, format: binary }
+      responses:
+        "202": { description: Three private files and three queued jobs persisted, content: { application/json: { schema: { $ref: "#/components/schemas/RecognitionSet" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+  /recognition/sets/{setId}:
+    get:
+      operationId: getRecognitionSet
+      security: [{ sessionCookie: [] }]
+      parameters: [{ name: setId, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200": { description: Tenant-scoped job and candidate state, content: { application/json: { schema: { $ref: "#/components/schemas/RecognitionSet" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /recognition/jobs/{jobId}/retry:
+    post:
+      operationId: retryRecognitionJob
+      security: [{ sessionCookie: [] }]
+      parameters: [{ name: jobId, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "202": { description: Persisted job requeued without deleting its file, content: { application/json: { schema: { $ref: "#/components/schemas/RecognitionSet" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /recognition/sets/{setId}/confirm:
+    post:
+      operationId: confirmRecognitionSet
+      security: [{ sessionCookie: [] }]
+      parameters: [{ name: setId, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/CreateProduct" } } } }
+      responses:
+        "201": { description: User-confirmed payload creates exactly one product, content: { application/json: { schema: { $ref: "#/components/schemas/Product" } } } }
+        "409": { description: Jobs are still processing }
+  /files/{fileId}:
+    get:
+      operationId: getPrivateFile
+      security: [{ sessionCookie: [] }]
+      parameters: [{ name: fileId, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200": { description: Authorized private image bytes, headers: { Cache-Control: { schema: { const: "private, no-store" } } }, content: { image/jpeg: {}, image/png: {}, image/webp: {} } }
+        "404": { $ref: "#/components/responses/NotFound" }
 components:
   securitySchemes:
     sessionCookie: { type: apiKey, in: cookie, name: suppq_session }
@@ -320,6 +372,42 @@ components:
         done: { type: boolean }
         available: { type: boolean }
         lastIntakeId: { type: string, format: uuid }
+    RecognitionCandidate:
+      type: object
+      required: [status, confidence]
+      properties:
+        status: { enum: [recognized, partial, unrecognized] }
+        language: { type: string }
+        confidence: { type: number, minimum: 0, maximum: 1 }
+        rawText: { type: string }
+        raw: { type: string }
+        date: { type: string, format: date }
+        fields: { type: object, additionalProperties: true }
+    RecognitionJob:
+      type: object
+      required: [id, role, status, provider, attempt, maxAttempts, confidence]
+      properties:
+        id: { type: string, format: uuid }
+        role: { enum: [front, facts, expiry] }
+        status: { enum: [queued, running, succeeded, partial, failed, cancelled] }
+        provider: { type: string, description: "pending, fake:development, or live:<provider>." }
+        attempt: { type: integer, minimum: 0 }
+        maxAttempts: { type: integer, minimum: 1 }
+        confidence: { type: number, minimum: 0, maximum: 1 }
+        result: { $ref: "#/components/schemas/RecognitionCandidate" }
+        errorCode: { type: string }
+        errorMessage: { type: string }
+    RecognitionSet:
+      type: object
+      required: [id, status, files, jobs, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        status: { enum: [processing, awaiting_confirmation, confirmed, cancelled] }
+        productId: { type: string, format: uuid }
+        files: { type: array, minItems: 3, maxItems: 3, items: { type: object, required: [id, role, mimeType, byteSize], properties: { id: { type: string, format: uuid }, role: { enum: [front, facts, expiry] }, mimeType: { enum: [image/jpeg, image/png, image/webp] }, byteSize: { type: integer } } } }
+        jobs: { type: array, minItems: 3, maxItems: 3, items: { $ref: "#/components/schemas/RecognitionJob" } }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
     ErrorEnvelope:
       type: object
       required: [error]

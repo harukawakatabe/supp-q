@@ -75,11 +75,19 @@ services:
       SUPPQ_SMTP_HOST: mailpit
       SUPPQ_SMTP_PORT: 1025
       SUPPQ_SMTP_FROM: 小补Q <no-reply@suppq.local>
+      SUPPQ_OBJECT_ENDPOINT: object-storage:8333
+      SUPPQ_OBJECT_ACCESS_KEY: suppq_local
+      SUPPQ_OBJECT_SECRET_KEY: suppq_local_only
+      SUPPQ_OBJECT_BUCKET: suppq-uploads
+      SUPPQ_OBJECT_REGION: us-east-1
+      SUPPQ_OBJECT_SECURE: "false"
     depends_on:
       migrate:
         condition: service_completed_successfully
       mailpit:
         condition: service_healthy
+      object-storage:
+        condition: service_started
     ports:
       - "127.0.0.1:8080:8080"
     healthcheck:
@@ -98,14 +106,24 @@ services:
       SUPPQ_ENV: development
       SUPPQ_DATABASE_URL: postgres://suppq:suppq_local_only@postgres:5432/suppq?sslmode=disable
       SUPPQ_DATABASE_TIMEOUT: 3s
-      SUPPQ_WORKER_INTERVAL: 30s
+      SUPPQ_WORKER_INTERVAL: 2s
       SUPPQ_TOKEN_PEPPER: suppq-development-pepper-not-for-production
       SUPPQ_SESSION_TTL: 720h
       SUPPQ_DEMO_TTL: 24h
       SUPPQ_EMAIL_CODE_TTL: 10m
+      SUPPQ_OBJECT_ENDPOINT: object-storage:8333
+      SUPPQ_OBJECT_ACCESS_KEY: suppq_local
+      SUPPQ_OBJECT_SECRET_KEY: suppq_local_only
+      SUPPQ_OBJECT_BUCKET: suppq-uploads
+      SUPPQ_OBJECT_REGION: us-east-1
+      SUPPQ_OBJECT_SECURE: "false"
+      SUPPQ_RECOGNITION_PROVIDER: fake
+      SUPPQ_RECOGNITION_TIMEOUT: 45s
     depends_on:
       migrate:
         condition: service_completed_successfully
+      object-storage:
+        condition: service_started
     restart: unless-stopped
 
   h5:

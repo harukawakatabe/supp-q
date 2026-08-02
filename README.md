@@ -5,16 +5,14 @@ recognition, scheduling, intake, inventory, and reminder service.
 
 ## Current status
 
-Phase 0 and the Phase 1 identity core are implemented and verified locally: a
-uni-app H5 shell, Go API, worker, migrations, PostgreSQL, isolated demo users,
-shared invitations, email-code and password authentication, invitation admin,
-Mailpit, private local S3 sandbox, and Caddy run together.
+Phase 0, Phase 1 identity, and the Phase 2 deterministic core are implemented
+and verified locally. The H5 now reads tenant-scoped products, three-layer
+schedules, batch inventory, Today progress, FEFO intake allocation, and exact
+undo from PostgreSQL. New demo sessions receive isolated sample products.
 
-Nothing is deployed to production. Product records, seeded demo products,
-schedules, inventory, intake, recognition, AI, reminders, storage cleanup,
-production email, automated browser E2E, backups, and production deployment
-remain unimplemented. The Today supplement cards are visibly labelled preview
-data.
+Nothing is deployed to production. Recognition, AI, reminders, records and
+restock UI, storage cleanup, production email, automated browser E2E, backups,
+and production deployment remain unimplemented.
 
 ## Start locally
 

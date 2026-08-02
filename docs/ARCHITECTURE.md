@@ -1,8 +1,8 @@
 # Target Architecture
 
-Status: target design with a locally verified Phase 0 runtime skeleton. Domain
-architecture below remains unimplemented unless `PROJECT_STATUS.md` says
-otherwise.
+Status: target design with locally verified Phase 0–2 foundations. Recognition,
+AI, reminder, and production-hardening sections remain target-only unless
+`PROJECT_STATUS.md` says otherwise.
 
 ## System
 
@@ -49,10 +49,8 @@ server/
 └── internal/
     ├── auth/
     ├── invitation/
-    ├── product/
-    ├── schedule/
-    ├── inventory/
-    ├── intake/
+    ├── catalog/       product, schedule, batch and intake transactions
+    ├── core/          deterministic quantity, schedule and FEFO rules
     ├── recognition/
     ├── ai/
     ├── notification/
@@ -165,8 +163,8 @@ static H5 delivery, and API reverse proxy. PostgreSQL remains the durable source
 of truth; production objects live in private Tencent COS or Alibaba OSS; backup
 artifacts live outside the application server.
 
-The locally implemented API surface now includes operations and Phase 1
-identity:
+The locally implemented API surface includes operations, identity, and the
+Phase 2 deterministic domain:
 
 ```text
 GET /api/v1/health/live  → process liveness only
@@ -174,10 +172,17 @@ GET /api/v1/health/ready → authenticated PostgreSQL ping
 GET /api/v1/session      → resume session or create isolated demo
 POST /api/v1/auth/*      → email code, password, reset, logout
 GET|POST|DELETE /api/v1/admin/invitations/*
+GET|POST /api/v1/products
+GET /api/v1/products/{id}
+POST /api/v1/products/{id}/batches
+GET /api/v1/today
+POST /api/v1/intakes
+DELETE /api/v1/intakes/{id}
 ```
 
 The worker now deletes due database-backed demo identities and their cascaded
-rows. It does not execute product, recognition, AI, file, or reminder jobs yet.
+rows. Product and intake writes are synchronous database transactions; the
+worker does not execute recognition, AI, file, or reminder jobs yet.
 
 Identity details and the remaining security gaps are recorded in
 `docs/IDENTITY.md`; stable errors are in `docs/ERRORS.md`.

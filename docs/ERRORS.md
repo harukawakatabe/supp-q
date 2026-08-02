@@ -21,6 +21,14 @@ Every error response uses:
 | `unauthorized` | 401 | No active registered session. |
 | `forbidden` | 403 | Authenticated actor lacks the admin role. |
 | `invitation_not_found` | 404 | Revocation target does not exist or is already revoked. |
+| `resource_not_found` | 404 | Tenant-scoped product, batch, or intake is absent; cross-tenant resources are intentionally indistinguishable. |
+| `invalid_product` | 400 | Product fields violate the deterministic domain contract. |
+| `invalid_schedule` | 400 | Date, weekday, reminder, or cycle rules are invalid. |
+| `invalid_batch` | 400 | Batch quantity, price, or expiry is invalid. |
+| `invalid_ingredient` | 400 | Ingredient amount or unit is invalid. |
+| `invalid_intake` | 400 | Intake date, time, source, quantity, or idempotency key is invalid. |
+| `invalid_date` | 400 | Today query date is not `YYYY-MM-DD`. |
+| `insufficient_inventory` | 409 | Full requested intake cannot be allocated; no partial mutation is committed. |
 | `rate_limited` | 429 | Email challenge request limit was reached. |
 | `email_delivery_failed` | 502 | SMTP delivery failed; the challenge was invalidated. |
 | `internal_error` | 500 | Unexpected server or database failure. |

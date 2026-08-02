@@ -15,6 +15,20 @@
       }
     },
     {
+      "path": "pages/cabinet/index",
+      "style": {
+        "navigationStyle": "custom",
+        "navigationBarTitleText": "补充柜"
+      }
+    },
+    {
+      "path": "pages/product/add",
+      "style": {
+        "navigationStyle": "custom",
+        "navigationBarTitleText": "添加产品"
+      }
+    },
+    {
       "path": "pages/admin/invitations",
       "style": {
         "navigationStyle": "custom",

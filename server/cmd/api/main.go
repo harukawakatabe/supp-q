@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"suppq.local/server/internal/catalog"
 	"suppq.local/server/internal/config"
 	"suppq.local/server/internal/database"
 	"suppq.local/server/internal/httpapi"
@@ -36,16 +37,19 @@ func main() {
 		os.Exit(1)
 	}
 	defer pool.Close()
+	catalogService := catalog.New(pool)
+	identityService := identity.New(pool, mailer.SMTP{
+		Host: cfg.SMTPHost, Port: cfg.SMTPPort, From: cfg.SMTPFrom,
+		Username: cfg.SMTPUsername, Password: cfg.SMTPPassword,
+	}, identity.Config{Pepper: cfg.TokenPepper, SessionTTL: cfg.SessionTTL, DemoTTL: cfg.DemoTTL, EmailCodeTTL: cfg.EmailCodeTTL}).WithDemoSeeder(catalogService)
 
 	handler := httpapi.New(httpapi.Dependencies{
 		AllowedOrigin: cfg.AllowedOrigin,
 		Database:      database.Checker{Pool: pool, Timeout: cfg.DatabaseTimeout},
 		Logger:        logger,
 		Version:       version,
-		Identity: identity.New(pool, mailer.SMTP{
-			Host: cfg.SMTPHost, Port: cfg.SMTPPort, From: cfg.SMTPFrom,
-			Username: cfg.SMTPUsername, Password: cfg.SMTPPassword,
-		}, identity.Config{Pepper: cfg.TokenPepper, SessionTTL: cfg.SessionTTL, DemoTTL: cfg.DemoTTL, EmailCodeTTL: cfg.EmailCodeTTL}),
+		Identity:      identityService,
+		Catalog:       catalogService,
 		SessionCookie: cfg.SessionCookie,
 		CookieSecure:  cfg.CookieSecure,
 	})

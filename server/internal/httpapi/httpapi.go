@@ -10,8 +10,10 @@ import (
 	"log/slog"
 	"mime"
 	"net/http"
+	"strings"
 	"time"
 
+	"suppq.local/server/internal/catalog"
 	"suppq.local/server/internal/identity"
 )
 
@@ -25,6 +27,7 @@ type Dependencies struct {
 	Logger        *slog.Logger
 	Version       string
 	Identity      *identity.Service
+	Catalog       *catalog.Service
 	SessionCookie string
 	CookieSecure  bool
 }
@@ -78,6 +81,9 @@ func New(deps Dependencies) http.Handler {
 	if deps.Identity != nil {
 		registerIdentityRoutes(mux, deps)
 	}
+	if deps.Identity != nil && deps.Catalog != nil {
+		registerCatalogRoutes(mux, deps)
+	}
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		response := errorResponse{}
 		response.Error.Code = "route_not_found"
@@ -87,6 +93,128 @@ func New(deps Dependencies) http.Handler {
 	})
 
 	return requestIDMiddleware(loggingMiddleware(deps.Logger, corsMiddleware(deps.AllowedOrigin, mux)))
+}
+
+func registerCatalogRoutes(mux *http.ServeMux, deps Dependencies) {
+	mux.HandleFunc("GET /api/v1/products", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := catalogActor(w, r, deps)
+		if !ok {
+			return
+		}
+		items, err := deps.Catalog.ListProducts(r.Context(), catalog.Scope{UserID: actor.UserID, WorkspaceID: actor.WorkspaceID})
+		if err != nil {
+			writeApplicationError(w, r, deps.Logger, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"items": items})
+	})
+	mux.HandleFunc("POST /api/v1/products", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := catalogActor(w, r, deps)
+		if !ok {
+			return
+		}
+		var body catalog.CreateProductInput
+		if err := readJSON(r, &body); err != nil {
+			writeApplicationError(w, r, deps.Logger, err)
+			return
+		}
+		created, err := deps.Catalog.CreateProduct(r.Context(), catalog.Scope{UserID: actor.UserID, WorkspaceID: actor.WorkspaceID}, body)
+		if err != nil {
+			writeApplicationError(w, r, deps.Logger, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, created)
+	})
+	mux.HandleFunc("GET /api/v1/products/{id}", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := catalogActor(w, r, deps)
+		if !ok {
+			return
+		}
+		item, err := deps.Catalog.GetProduct(r.Context(), catalog.Scope{UserID: actor.UserID, WorkspaceID: actor.WorkspaceID}, r.PathValue("id"))
+		if err != nil {
+			writeApplicationError(w, r, deps.Logger, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, item)
+	})
+	mux.HandleFunc("POST /api/v1/products/{id}/batches", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := catalogActor(w, r, deps)
+		if !ok {
+			return
+		}
+		var body catalog.BatchInput
+		if err := readJSON(r, &body); err != nil {
+			writeApplicationError(w, r, deps.Logger, err)
+			return
+		}
+		item, err := deps.Catalog.AddBatch(r.Context(), catalog.Scope{UserID: actor.UserID, WorkspaceID: actor.WorkspaceID}, r.PathValue("id"), body)
+		if err != nil {
+			writeApplicationError(w, r, deps.Logger, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, item)
+	})
+	mux.HandleFunc("GET /api/v1/today", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := catalogActor(w, r, deps)
+		if !ok {
+			return
+		}
+		scope := catalog.Scope{UserID: actor.UserID, WorkspaceID: actor.WorkspaceID}
+		if actor.Kind == "demo_ephemeral" {
+			if err := deps.Catalog.EnsureDemo(r.Context(), scope); err != nil {
+				writeApplicationError(w, r, deps.Logger, err)
+				return
+			}
+		}
+		date := strings.TrimSpace(r.URL.Query().Get("date"))
+		if date == "" {
+			date = time.Now().UTC().Format("2006-01-02")
+		}
+		items, err := deps.Catalog.Today(r.Context(), scope, date)
+		if err != nil {
+			writeApplicationError(w, r, deps.Logger, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"date": date, "items": items})
+	})
+	mux.HandleFunc("POST /api/v1/intakes", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := catalogActor(w, r, deps)
+		if !ok {
+			return
+		}
+		var body catalog.CreateIntakeInput
+		if err := readJSON(r, &body); err != nil {
+			writeApplicationError(w, r, deps.Logger, err)
+			return
+		}
+		intake, product, err := deps.Catalog.CreateIntake(r.Context(), catalog.Scope{UserID: actor.UserID, WorkspaceID: actor.WorkspaceID}, body, strings.TrimSpace(r.Header.Get("Idempotency-Key")))
+		if err != nil {
+			writeApplicationError(w, r, deps.Logger, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, map[string]any{"intake": intake, "product": product})
+	})
+	mux.HandleFunc("DELETE /api/v1/intakes/{id}", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := catalogActor(w, r, deps)
+		if !ok {
+			return
+		}
+		intake, product, err := deps.Catalog.UndoIntake(r.Context(), catalog.Scope{UserID: actor.UserID, WorkspaceID: actor.WorkspaceID}, r.PathValue("id"))
+		if err != nil {
+			writeApplicationError(w, r, deps.Logger, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"intake": intake, "product": product})
+	})
+}
+
+func catalogActor(w http.ResponseWriter, r *http.Request, deps Dependencies) (identity.Actor, bool) {
+	actor, err := deps.Identity.ActorForToken(r.Context(), sessionToken(r, deps.SessionCookie), true)
+	if err != nil {
+		writeApplicationError(w, r, deps.Logger, err)
+		return identity.Actor{}, false
+	}
+	return actor, true
 }
 
 func registerIdentityRoutes(mux *http.ServeMux, deps Dependencies) {
@@ -299,6 +427,18 @@ func writeApplicationError(w http.ResponseWriter, r *http.Request, logger *slog.
 			status = http.StatusNotFound
 		case "email_delivery_failed":
 			status = http.StatusBadGateway
+		}
+	}
+	var catalogErr *catalog.Error
+	if errors.As(err, &catalogErr) {
+		code, message = catalogErr.Code, catalogErr.Message
+		switch code {
+		case "resource_not_found":
+			status = http.StatusNotFound
+		case "insufficient_inventory", "intake_already_undone":
+			status = http.StatusConflict
+		case "invalid_product", "invalid_schedule", "invalid_batch", "invalid_ingredient", "invalid_intake", "invalid_date":
+			status = http.StatusBadRequest
 		}
 	}
 	if status >= 500 {

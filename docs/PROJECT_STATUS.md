@@ -1,6 +1,6 @@
 # Project Status
 
-Last updated: 2026-08-01
+Last updated: 2026-08-02
 
 ## Shipped to production
 
@@ -36,8 +36,22 @@ Nothing in `uni/` is deployed or serving real users yet.
 - Minimal H5 authentication and invitation-administration pages. Invitation
   secrets are returned only once; the initial admin is bootstrapped by CLI.
 - Stable Phase 1 error registry and OpenAPI 0.2 identity contract.
+- PostgreSQL product, ingredient, schedule, day-cycle history, inventory batch,
+  intake, allocation, and inventory-event schema with user/workspace scope on
+  every private lookup and mutation.
+- Six-decimal fixed-point quantities, three-layer schedule intersection,
+  independent cycle anchors, historical day-cycle evaluation, projected finish,
+  latest-start, and expiry-risk calculations.
+- FEFO allocation with `NULL` expiry last, all-or-nothing stock checks,
+  idempotent intake creation, exact allocation-backed undo, and auditable stock
+  events in one transaction.
+- Deterministic demo seed containing D3, magnesium, and fish oil. Existing empty
+  demo workspaces are seeded lazily; registered workspaces remain empty.
+- Real H5 Today, Cabinet, and Add Product pages backed by the Phase 2 API. The
+  previous static preview cards were removed.
+- OpenAPI 0.3 domain contract and stable Phase 2 error codes.
 
-## Acceptance evidence on 2026-08-01
+## Acceptance evidence on 2026-08-01 and 2026-08-02
 
 - `pnpm install --frozen-lockfile`: pass with four explicitly allowed build
   dependencies.
@@ -72,27 +86,43 @@ Nothing in `uni/` is deployed or serving real users yet.
 - Real H5 browser at 390x844 completed demo → password login → registered empty
   workspace → logout → new isolated demo. Admin login exposed the invitation
   page with both created invitations and no horizontal overflow.
+- Phase 2 pure Go tests pass schedule intersection, rest-day finish projection,
+  independent anchors, historical day-cycle rules, fixed-point arithmetic,
+  FEFO, atomic insufficient-stock rejection, and exact restoration.
+- Phase 2 PostgreSQL integration test creates a fresh schema and passes scoped
+  product access, FEFO split allocation, idempotent retry, no partial mutation,
+  exact and repeat-safe undo, cross-tenant read/undo hiding, and Today projection.
+- `pnpm type-check`, 5/5 client tests, and `pnpm build:h5` pass for the real
+  Today/Cabinet/Add client.
+- Rebuilt Compose applied migration `202608020001`; live Caddy-proxied HTTP
+  created an isolated three-product demo, deducted D3 from 28 to 27, replayed
+  the same idempotency key without another deduction, and restored the exact
+  batch to 28 on undo.
+- Real H5 at 390×844 loaded 3 calculated Today items, changed 0/3 → 1/3 on
+  intake and back to 0/3 on undo, displayed the real Cabinet batches and risk,
+  opened the Add Product form, had no horizontal overflow, and logged no
+  browser console warnings or errors.
 
 ## In progress
 
-- Closing Phase 1 identity documentation and repeatable acceptance commands.
-- Preparing Phase 2 deterministic product, schedule, inventory, and intake
-  schema without weakening user/workspace authorization boundaries.
+- Filling Phase 2 surface gaps: restock UI, schedule editing/version creation,
+  and a Records page.
+- Adding automated browser E2E and a repeatable restart-persistence check; the
+  current H5 acceptance is manual browser evidence.
 
 ## Not started
 
-- Product, schedule, inventory, and intake domains.
 - Upload and recognition job implementation.
 - OCR/vision and Kimi live/fake provider adapters.
-- Main-path H5 interactions beyond the Today shell.
+- Records, restock, product-detail/edit, and account-deletion H5 interactions.
 - Application reminders.
-- Domain authorization, integration, and browser E2E suites.
+- Automated browser E2E suites (domain authorization has PostgreSQL integration coverage).
 - Production deployment, backup, restore, monitoring, and alerting.
 - Automatic delivery of email-bound invitation links through the selected
   production email provider.
 - Reverse-proxy/IP abuse limits and automated browser E2E for identity paths.
-- Demo sample products and records; the identity is seeded only after Phase 2
-  domain tables exist.
+- Demo sample intake history; Phase 2 currently seeds products and batches, not
+  historical intake records.
 
 ## Deferred after V1
 

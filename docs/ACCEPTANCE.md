@@ -38,7 +38,7 @@ anonymous demo
 - restart persistence
 - mobile and desktop H5 browser paths
 
-## Current Phase 1 evidence
+## Current Phase 1–2 evidence
 
 Implemented automated coverage:
 
@@ -48,6 +48,10 @@ Implemented automated coverage:
 - email-code and password identities resolving to the same user
 - password reset and all-session invalidation
 - login-origin demo cleanup
+- schedule intersection, independent anchors, historical day-cycle rules,
+  projected finish, latest start, and fixed-point quantity arithmetic
+- FEFO split allocation, atomic insufficient-stock rejection, idempotent intake,
+  exact repeat-safe undo, Today projection, and cross-tenant resource hiding
 
 Manually exercised against the real local stack:
 
@@ -57,10 +61,10 @@ Manually exercised against the real local stack:
 - mobile H5 demo, password login, registered workspace, logout, and new demo
 - role-gated invitation administration page
 
-This is not the complete V1 acceptance gate. Cross-user product access,
-recognition, deterministic domains, object deletion, automated browser E2E,
-restart persistence, backup restore, and production-like provider behavior
-remain untestable until their implementation phases.
+This is not the complete V1 acceptance gate. Recognition, object deletion,
+automated browser E2E, restart persistence, backup restore, and production-like
+provider behavior remain untestable until their implementation phases. Product
+authorization and deterministic domains now have direct integration evidence.
 
 ## Recognition evaluation
 

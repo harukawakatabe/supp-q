@@ -1,8 +1,8 @@
 openapi: 3.1.0
 info:
   title: Supp Q API
-  version: 0.2.0
-  description: Phase 1 operational, session, authentication, and invitation contract.
+  version: 0.3.0
+  description: Phase 2 identity, deterministic product, schedule, batch inventory, and intake contract.
 servers:
   - url: /api/v1
 paths:
@@ -116,6 +116,60 @@ paths:
         "204": { description: Invitation revoked. }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /products:
+    get:
+      operationId: listProducts
+      security: [{ sessionCookie: [] }]
+      responses:
+        "200": { description: Tenant-scoped active product projections, content: { application/json: { schema: { type: object, required: [items], properties: { items: { type: array, items: { $ref: "#/components/schemas/Product" } } } } } } }
+    post:
+      operationId: createProduct
+      security: [{ sessionCookie: [] }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/CreateProduct" } } } }
+      responses:
+        "201": { description: Product, initial schedule, and opening batch committed atomically, content: { application/json: { schema: { $ref: "#/components/schemas/Product" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+  /products/{productId}:
+    get:
+      operationId: getProduct
+      security: [{ sessionCookie: [] }]
+      parameters: [{ name: productId, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200": { description: Tenant-scoped product projection, content: { application/json: { schema: { $ref: "#/components/schemas/Product" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /products/{productId}/batches:
+    post:
+      operationId: addInventoryBatch
+      security: [{ sessionCookie: [] }]
+      parameters: [{ name: productId, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/BatchInput" } } } }
+      responses:
+        "201": { description: Independent inventory batch added, content: { application/json: { schema: { $ref: "#/components/schemas/Product" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /today:
+    get:
+      operationId: getToday
+      security: [{ sessionCookie: [] }]
+      parameters: [{ name: date, in: query, required: true, schema: { type: string, format: date } }]
+      responses:
+        "200": { description: Weekly, day-cycle, and long-cycle intersection with intake progress, content: { application/json: { schema: { type: object, required: [date, items], properties: { date: { type: string, format: date }, items: { type: array, items: { $ref: "#/components/schemas/TodayItem" } } } } } } }
+  /intakes:
+    post:
+      operationId: createIntake
+      security: [{ sessionCookie: [] }]
+      parameters: [{ name: Idempotency-Key, in: header, required: false, schema: { type: string, maxLength: 160 } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/CreateIntake" } } } }
+      responses:
+        "201": { description: Intake and exact FEFO allocation committed atomically }
+        "409": { description: Insufficient inventory; no partial mutation occurs }
+  /intakes/{intakeId}:
+    delete:
+      operationId: undoIntake
+      security: [{ sessionCookie: [] }]
+      parameters: [{ name: intakeId, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200": { description: Intake revoked and its recorded allocations restored to the same batches; repeated calls are idempotent }
+        "404": { $ref: "#/components/responses/NotFound" }
 components:
   securitySchemes:
     sessionCookie: { type: apiKey, in: cookie, name: suppq_session }
@@ -203,6 +257,69 @@ components:
         expiresAt: { type: string, format: date-time }
         revokedAt: { type: string, format: date-time }
         createdAt: { type: string, format: date-time }
+    BatchInput:
+      type: object
+      required: [quantity]
+      properties:
+        quantity: { type: number, exclusiveMinimum: 0 }
+        expiryDate: { type: string, format: date }
+        priceCny: { type: number, minimum: 0 }
+    ScheduleInput:
+      type: object
+      required: [startDate, weekdays, dayCycle, longCycle, reminderTimes]
+      properties:
+        startDate: { type: string, format: date }
+        weekdays: { type: array, minItems: 1, maxItems: 7, uniqueItems: true, items: { type: integer, minimum: 0, maximum: 6 } }
+        dayCycle: { type: object, required: [enabled, cycleDays, takeDays, anchorDate], properties: { enabled: { type: boolean }, cycleDays: { type: integer, minimum: 1 }, takeDays: { type: integer, minimum: 1 }, anchorDate: { type: string, format: date } } }
+        longCycle: { type: object, required: [enabled, takeWeeks, restWeeks, startDate], properties: { enabled: { type: boolean }, takeWeeks: { type: integer, minimum: 1 }, restWeeks: { type: integer, minimum: 0 }, startDate: { type: string, format: date } } }
+        reminderTimes: { type: array, minItems: 1, maxItems: 8, items: { type: string, pattern: "^(?:[01][0-9]|2[0-3]):[0-5][0-9]$" } }
+    CreateProduct:
+      type: object
+      required: [name, unit, doseQuantity, doseTimesPerDay, schedule, openingBatch]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 160 }
+        brand: { type: string, maxLength: 120 }
+        productType: { enum: [supplement, otc, prescription] }
+        unit: { type: string, minLength: 1, maxLength: 40 }
+        doseQuantity: { type: number, exclusiveMinimum: 0 }
+        doseTimesPerDay: { type: integer, minimum: 1, maximum: 8 }
+        schedule: { $ref: "#/components/schemas/ScheduleInput" }
+        openingBatch: { $ref: "#/components/schemas/BatchInput" }
+    Product:
+      type: object
+      required: [id, name, status, unit, doseQuantity, dailyQuantity, currentQuantity, schedule, batches, ingredients, expiryRisk]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        brand: { type: string }
+        status: { enum: [active, paused, depleted] }
+        unit: { type: string }
+        doseQuantity: { type: number }
+        dailyQuantity: { type: number }
+        currentQuantity: { type: number }
+        schedule: { $ref: "#/components/schemas/ScheduleInput" }
+        batches: { type: array, items: { type: object } }
+        ingredients: { type: array, items: { type: object } }
+        expiryRisk: { type: object, required: [level, message], properties: { level: { enum: [none, safe, warn, danger] }, message: { type: string }, expiryDate: { type: string, format: date }, projectedFinishDate: { type: string, format: date }, latestStartDate: { type: string, format: date } } }
+    CreateIntake:
+      type: object
+      required: [productId, date, quantity, source]
+      properties:
+        productId: { type: string, format: uuid }
+        date: { type: string, format: date }
+        time: { type: string, pattern: "^(?:[01][0-9]|2[0-3]):[0-5][0-9]$" }
+        quantity: { type: number, exclusiveMinimum: 0 }
+        source: { enum: [scheduled, ad_hoc, backfill] }
+    TodayItem:
+      type: object
+      required: [product, scheduledQuantity, takenQuantity, done, available]
+      properties:
+        product: { $ref: "#/components/schemas/Product" }
+        scheduledQuantity: { type: number }
+        takenQuantity: { type: number }
+        done: { type: boolean }
+        available: { type: boolean }
+        lastIntakeId: { type: string, format: uuid }
     ErrorEnvelope:
       type: object
       required: [error]

@@ -38,14 +38,24 @@ type Config struct {
 }
 
 type Service struct {
-	pool   *pgxpool.Pool
-	mailer mailer.LoginCodeSender
-	cfg    Config
-	now    func() time.Time
+	pool       *pgxpool.Pool
+	mailer     mailer.LoginCodeSender
+	cfg        Config
+	now        func() time.Time
+	demoSeeder DemoSeeder
+}
+
+type DemoSeeder interface {
+	SeedDemo(context.Context, pgx.Tx, string, string, time.Time) error
 }
 
 func New(pool *pgxpool.Pool, sender mailer.LoginCodeSender, cfg Config) *Service {
 	return &Service{pool: pool, mailer: sender, cfg: cfg, now: func() time.Time { return time.Now().UTC() }}
+}
+
+func (service *Service) WithDemoSeeder(seeder DemoSeeder) *Service {
+	service.demoSeeder = seeder
+	return service
 }
 
 type Actor struct {
@@ -169,6 +179,11 @@ func (service *Service) createDemoSession(ctx context.Context) (SessionResult, e
 	}
 	if _, err = tx.Exec(ctx, `INSERT INTO sessions (id,user_id,workspace_id,token_digest,kind,expires_at,last_activity_at,created_at) VALUES ($1,$2,$3,$4,'demo',$5,$6,$6)`, sessionID, userID, workspaceID, digest(service.cfg.Pepper, "session", token), expires, now); err != nil {
 		return SessionResult{}, err
+	}
+	if service.demoSeeder != nil {
+		if err = service.demoSeeder.SeedDemo(ctx, tx, userID, workspaceID, now); err != nil {
+			return SessionResult{}, err
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return SessionResult{}, err

@@ -41,13 +41,13 @@ export class APIError extends Error {
 
 const publicApiBase = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/$/, "");
 
-async function apiRequest<T>(path: string, method: "GET" | "POST" | "DELETE" = "GET", data?: object): Promise<T> {
+async function apiRequest<T>(path: string, method: "GET" | "POST" | "DELETE" = "GET", data?: object, headers?: Record<string, string>): Promise<T> {
   const response = await uni.request({
     url: `${publicApiBase}/api/v1${path}`,
     method,
     data,
     timeout: 8000,
-    header: data ? { "Content-Type": "application/json" } : undefined,
+    header: { ...(data ? { "Content-Type": "application/json" } : {}), ...headers },
     withCredentials: true,
   });
 
@@ -108,4 +108,77 @@ export function createInvitation(input: { kind: string; email?: string; maxUses:
 
 export function revokeInvitation(id: string): Promise<void> {
   return apiRequest(`/admin/invitations/${encodeURIComponent(id)}`, "DELETE");
+}
+
+export type Schedule = {
+  version: number;
+  startDate: string;
+  weekdays: number[];
+  dayCycle: { enabled: boolean; cycleDays: number; takeDays: number; anchorDate: string };
+  longCycle: { enabled: boolean; takeWeeks: number; restWeeks: number; startDate: string };
+  reminderTimes: string[];
+};
+
+export type Product = {
+  id: string;
+  name: string;
+  brand: string;
+  productType: "supplement" | "otc" | "prescription";
+  status: "active" | "paused" | "depleted";
+  unit: string;
+  doseQuantity: number;
+  doseTimesPerDay: number;
+  dailyQuantity: number;
+  currentQuantity: number;
+  restockThresholdDays: number;
+  expiryReminderDays: number;
+  schedule: Schedule;
+  batches: Array<{ id: string; initialQuantity: number; currentQuantity: number; expiryDate?: string; priceCny: number; createdAt: string }>;
+  ingredients: Array<{ id: string; key: string; name: string; amount: number; unit: string }>;
+  expiryRisk: { level: "none" | "safe" | "warn" | "danger"; message: string; expiryDate?: string; projectedFinishDate?: string; latestStartDate?: string };
+};
+
+export type TodayItem = {
+  product: Product;
+  scheduledQuantity: number;
+  takenQuantity: number;
+  done: boolean;
+  available: boolean;
+  lastIntakeId?: string;
+};
+
+export type Intake = {
+  id: string;
+  productId: string;
+  date: string;
+  time?: string;
+  quantity: number;
+  source: string;
+  status: "active" | "revoked";
+};
+
+export async function getToday(date: string): Promise<TodayItem[]> {
+  const result = await apiRequest<{ items: TodayItem[] }>(`/today?date=${encodeURIComponent(date)}`);
+  return result.items;
+}
+
+export async function listProducts(): Promise<Product[]> {
+  const result = await apiRequest<{ items: Product[] }>("/products");
+  return result.items;
+}
+
+export function createProduct(input: object): Promise<Product> {
+  return apiRequest("/products", "POST", input);
+}
+
+export function addBatch(productId: string, input: { quantity: number; expiryDate?: string; priceCny?: number }): Promise<Product> {
+  return apiRequest(`/products/${encodeURIComponent(productId)}/batches`, "POST", input);
+}
+
+export async function createIntake(input: { productId: string; date: string; time: string; quantity: number; source: string }, idempotencyKey: string): Promise<{ intake: Intake; product: Product }> {
+  return apiRequest("/intakes", "POST", input, { "Idempotency-Key": idempotencyKey });
+}
+
+export function undoIntake(id: string): Promise<{ intake: Intake; product: Product }> {
+  return apiRequest(`/intakes/${encodeURIComponent(id)}`, "DELETE");
 }

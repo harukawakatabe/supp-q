@@ -2,15 +2,15 @@
 
 ## Current truth
 
-Phase 0 and the Phase 1 identity core are locally operational and
-evidence-backed. The H5 shell, Go process layout, migrations, PostgreSQL,
-isolated demo sessions, invitations, email codes, password login/reset, worker
-cleanup, local S3 sandbox, Mailpit, and Caddy path work together.
+Phase 0, Phase 1 identity, and the Phase 2 deterministic core are implemented
+and test-backed. Products, ingredients, three-layer schedules, day-cycle
+history, batch inventory, Today progress, FEFO intake allocation, exact undo,
+and isolated demo seed data persist in PostgreSQL and are exposed to the H5.
 
-Do not inflate that statement. Domain records, seeded demo products,
-recognition, AI, reminders, storage cleanup, automated browser E2E, backup, and
-production deployment are not implemented. Static Today cards are preview
-content, not user data or functioning schedule records.
+Do not inflate that statement. Restock UI, schedule editing/version creation,
+Records, recognition, AI, reminders, storage cleanup, automated browser E2E,
+backup, and production deployment are not implemented. Today is real domain
+data now; there are no static fallback cards.
 
 ## Read first
 
@@ -85,13 +85,20 @@ invitation-email delivery, IP/proxy abuse controls, automated browser E2E, and
 file cleanup after file persistence exists. Sample demo products move into
 Phase 2 because their domain schema does not exist yet.
 
-### Phase 2: deterministic core
+### Completed Phase 2 core: deterministic domain
 
-- Port and test dates, schedules, inventory, products, ingredients, and intake.
-- Do not introduce whole-state sync.
+- Fixed-point dates/quantities, schedule intersection, independent anchors, and
+  non-retroactive day-cycle history.
+- Tenant-scoped products, ingredients, schedules, batches, intake records,
+  exact allocations, and inventory events.
+- FEFO, atomic insufficient-stock rejection, idempotent retry, and exact undo.
+- H5 Today, Cabinet, Add Product, and isolated product seed for demo workspaces.
 
-Acceptance: FEFO, exact undo, three-layer schedule intersection, finish-date,
-and expiry calculations pass unit and integration tests.
+Acceptance passed in unit and PostgreSQL integration tests. The rebuilt Compose
+stack also passed live proxied HTTP and a 390×844 browser path for Today intake,
+undo, Cabinet, and Add Product. Still add schedule editing/version writes,
+restock and Records surfaces, automated browser E2E, and a desktop pass before
+closing the entire Phase 2 product surface.
 
 ### Phase 3: capture and recognition
 

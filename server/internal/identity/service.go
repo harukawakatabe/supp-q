@@ -14,12 +14,13 @@ import (
 )
 
 var (
-	ErrInvalidCredentials = NewError("invalid_credentials", "邮箱、验证码或密码不正确。")
-	ErrInvitationRequired = NewError("invitation_required", "新账户需要有效邀请。")
-	ErrInvitationInvalid  = NewError("invitation_invalid", "邀请不存在、已过期、已撤销或已用完。")
-	ErrRateLimited        = NewError("rate_limited", "请求过于频繁，请稍后再试。")
-	ErrUnauthorized       = NewError("unauthorized", "请先登录。")
-	ErrForbidden          = NewError("forbidden", "当前账户无权执行此操作。")
+	ErrInvalidCredentials  = NewError("invalid_credentials", "邮箱、验证码或密码不正确。")
+	ErrInvitationRequired  = NewError("invitation_required", "新账户需要有效邀请。")
+	ErrInvitationInvalid   = NewError("invitation_invalid", "邀请不存在、已过期、已撤销或已用完。")
+	ErrRateLimited         = NewError("rate_limited", "请求过于频繁，请稍后再试。")
+	ErrUnauthorized        = NewError("unauthorized", "请先登录。")
+	ErrForbidden           = NewError("forbidden", "当前账户无权执行此操作。")
+	ErrInvalidConfirmation = NewError("invalid_confirmation", "请输入当前账户邮箱以确认删除。")
 )
 
 type Error struct {
@@ -693,6 +694,123 @@ func (service *Service) BootstrapAdmin(ctx context.Context, email string) error 
 	return tx.Commit(ctx)
 }
 
+func (service *Service) RequestAccountDeletion(ctx context.Context, actor Actor, confirmation string) error {
+	if actor.Kind != "registered" || actor.Email == "" {
+		return ErrForbidden
+	}
+	normalized, err := normalizeEmail(confirmation)
+	if err != nil || normalized != actor.Email {
+		return ErrInvalidConfirmation
+	}
+	now := service.now()
+	jobID, err := newUUID()
+	if err != nil {
+		return err
+	}
+	tx, err := service.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	result, err := tx.Exec(ctx, `UPDATE users SET status='pending_deletion',deleted_at=$1 WHERE id=$2 AND kind='registered' AND status='active'`, now, actor.UserID)
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() != 1 {
+		return ErrUnauthorized
+	}
+	if _, err = tx.Exec(ctx, `UPDATE sessions SET invalidated_at=$1 WHERE user_id=$2 AND invalidated_at IS NULL`, now, actor.UserID); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, `INSERT INTO account_cleanup_jobs (id,user_id,run_after,status,created_at,updated_at) VALUES ($1,$2,$3,'pending',$3,$3) ON CONFLICT (user_id) DO UPDATE SET run_after=EXCLUDED.run_after,status='pending',last_error='',updated_at=EXCLUDED.updated_at`, jobID, actor.UserID, now); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (service *Service) ClaimAccountCleanup(ctx context.Context) (string, bool, error) {
+	now := service.now()
+	tx, err := service.pool.Begin(ctx)
+	if err != nil {
+		return "", false, err
+	}
+	defer tx.Rollback(ctx)
+	var userID string
+	err = tx.QueryRow(ctx, `SELECT user_id FROM account_cleanup_jobs WHERE run_after<=$1 AND (status IN ('pending','failed') OR (status='running' AND updated_at<$2)) ORDER BY run_after,created_at FOR UPDATE SKIP LOCKED LIMIT 1`, now, now.Add(-10*time.Minute)).Scan(&userID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	if _, err = tx.Exec(ctx, `UPDATE account_cleanup_jobs SET status='running',attempts=attempts+1,last_error='',updated_at=$1 WHERE user_id=$2`, now, userID); err != nil {
+		return "", false, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return "", false, err
+	}
+	return userID, true, nil
+}
+
+func (service *Service) FailAccountCleanup(ctx context.Context, userID string, cleanupErr error) error {
+	now := service.now()
+	message := "cleanup failed"
+	if cleanupErr != nil {
+		message = cleanupErr.Error()
+	}
+	if len(message) > 500 {
+		message = message[:500]
+	}
+	_, err := service.pool.Exec(ctx, `UPDATE account_cleanup_jobs SET status='failed',last_error=$1,run_after=$2,updated_at=$3 WHERE user_id=$4`, message, now.Add(5*time.Minute), now, userID)
+	return err
+}
+
+func (service *Service) CompleteAccountCleanup(ctx context.Context, userID string) error {
+	tx, err := service.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	rows, err := tx.Query(ctx, `SELECT provider_subject FROM auth_identities WHERE user_id=$1 AND provider IN ('email_code','email_password')`, userID)
+	if err != nil {
+		return err
+	}
+	emails := []string{}
+	for rows.Next() {
+		var email string
+		if err = rows.Scan(&email); err != nil {
+			rows.Close()
+			return err
+		}
+		emails = append(emails, email)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, `DELETE FROM invitation_acceptances WHERE user_id=$1 OR email_normalized=ANY($2)`, userID, emails); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, `DELETE FROM invitations WHERE kind='email_bound' AND email_normalized=ANY($1)`, emails); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, `UPDATE invitations SET created_by=NULL WHERE created_by=$1`, userID); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, `DELETE FROM email_challenges WHERE email_normalized=ANY($1)`, emails); err != nil {
+		return err
+	}
+	result, err := tx.Exec(ctx, `DELETE FROM users WHERE id=$1 AND kind='registered' AND status='pending_deletion'`, userID)
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() != 1 {
+		return ErrUnauthorized
+	}
+	return tx.Commit(ctx)
+}
+
 func (service *Service) CleanupExpiredDemos(ctx context.Context, limit int) (int, error) {
 	if limit <= 0 {
 		limit = 100
@@ -720,7 +838,7 @@ func (service *Service) CleanupExpiredDemos(ctx context.Context, limit int) (int
 	rows.Close()
 	deleted := 0
 	for _, id := range ids {
-		tag, deleteErr := service.pool.Exec(ctx, `DELETE FROM users WHERE id=$1 AND kind='demo_ephemeral'`, id)
+		tag, deleteErr := service.pool.Exec(ctx, `DELETE FROM users WHERE id=$1 AND kind='demo_ephemeral' AND NOT EXISTS (SELECT 1 FROM files WHERE user_id=$1 AND status='active')`, id)
 		if deleteErr != nil {
 			_, _ = service.pool.Exec(ctx, `UPDATE demo_cleanup_jobs SET status='failed',attempts=attempts+1,last_error=$1,updated_at=$2 WHERE user_id=$3`, deleteErr.Error(), now, id)
 			continue

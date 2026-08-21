@@ -68,8 +68,23 @@ func TestCatalogInventoryLifecycleAndIsolation(t *testing.T) {
 	if _, err = service.GetProduct(ctx, other, product.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("cross-tenant read must be hidden, got %v", err)
 	}
+	product, err = service.UpdateProduct(ctx, owner, product.ID, UpdateProductInput{
+		Name: "测试镁（已核对）", Brand: "测试品牌", ProductType: "supplement", Status: "active", Unit: "粒",
+		DoseQuantity: 2, DoseTimesPerDay: 1, IngredientServingQuantity: 2, RestockThresholdDays: 10, ExpiryReminderDays: 45,
+		Schedule:    ScheduleInput{StartDate: "2026-08-01", Weekdays: []int{0, 1, 2, 3, 4, 5, 6}, DayCycle: DayCycleInput{Enabled: true, CycleDays: 28, TakeDays: 21, AnchorDate: "2026-08-03"}, LongCycle: LongCycleInput{Enabled: false, TakeWeeks: 6, RestWeeks: 4, StartDate: "2026-08-01"}, ReminderTimes: []string{"22:00"}},
+		Ingredients: []IngredientInput{{Key: "magnesium", Name: "镁", Amount: 200, Unit: "mg"}}, EffectiveDate: "2026-08-03",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if product.Name != "测试镁（已核对）" || product.Schedule.Version != 2 || !product.Schedule.DayCycle.Enabled || product.Schedule.ReminderTimes[0] != "22:00" {
+		t.Fatalf("product update did not persist: %+v", product)
+	}
+	if _, err = service.UpdateProduct(ctx, other, product.ID, UpdateProductInput{Name: "越权", ProductType: "supplement", Status: "active", Unit: "粒", DoseQuantity: 1, DoseTimesPerDay: 1, IngredientServingQuantity: 1, RestockThresholdDays: 7, ExpiryReminderDays: 30, Schedule: ScheduleInput{StartDate: "2026-08-02", Weekdays: []int{0}, DayCycle: DayCycleInput{Enabled: false, CycleDays: 28, TakeDays: 28, AnchorDate: "2026-08-02"}, LongCycle: LongCycleInput{Enabled: false, TakeWeeks: 6, RestWeeks: 4, StartDate: "2026-08-02"}, ReminderTimes: []string{"09:00"}}, EffectiveDate: "2026-08-03"}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("cross-tenant update must be hidden, got %v", err)
+	}
 
-	intake, after, err := service.CreateIntake(ctx, owner, CreateIntakeInput{ProductID: product.ID, Date: "2026-08-02", Time: "22:30", Quantity: 3, Source: "scheduled"}, "test-intake-1")
+	intake, after, err := service.CreateIntake(ctx, owner, CreateIntakeInput{ProductID: product.ID, Date: "2026-08-02", Time: "22:30", Quantity: 3, Source: "scheduled", Note: "随餐"}, "test-intake-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,6 +126,17 @@ func TestCatalogInventoryLifecycleAndIsolation(t *testing.T) {
 	if restoredAgain.CurrentQuantity != 6 {
 		t.Fatal("repeated undo changed inventory")
 	}
+	records, err := service.ListIntakes(ctx, owner, "2026-08-01", "2026-08-31")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 || records[0].Status != "revoked" || records[0].ProductName != "测试镁（已核对）" || records[0].Note != "随餐" {
+		t.Fatalf("unexpected intake records: %+v", records)
+	}
+	otherRecords, err := service.ListIntakes(ctx, other, "2026-08-01", "2026-08-31")
+	if err != nil || len(otherRecords) != 0 {
+		t.Fatalf("cross-tenant records leaked: %+v err=%v", otherRecords, err)
+	}
 	if _, _, err = service.UndoIntake(ctx, other, intake.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("cross-tenant undo must be hidden, got %v", err)
 	}
@@ -120,7 +146,10 @@ func TestCatalogInventoryLifecycleAndIsolation(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(today) != 1 || today[0].Done || today[0].ScheduledQuantity != 2 {
-		t.Fatalf("unexpected today projection: %+v", today)
+		current, _ := service.GetProduct(ctx, owner, product.ID)
+		var history string
+		_ = pool.QueryRow(ctx, `SELECT COALESCE(json_agg(json_build_object('effective',effective_date,'enabled',enabled,'anchor',anchor_date) ORDER BY effective_date),'[]')::text FROM day_cycle_versions WHERE product_id=$1`, product.ID).Scan(&history)
+		t.Fatalf("unexpected today projection: %+v current=%+v history=%s", today, current, history)
 	}
 }
 

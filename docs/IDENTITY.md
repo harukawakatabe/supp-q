@@ -1,7 +1,7 @@
 # Phase 1 Identity and Invitation
 
-Status: implemented and verified locally on 2026-08-01. Production provider
-configuration and automated browser E2E remain pending.
+Status: implemented and verified locally through 2026-08-21. Production SMTP
+selection/delivery and automatic invitation-link sending remain pending.
 
 ## User paths
 
@@ -65,16 +65,19 @@ may bind one during email-code verification.
 
 ## Known gaps
 
-- The demo identity is real and isolated, but sample products and intake records
-  cannot be seeded until Phase 2 adds those domain tables.
-- Cleanup currently removes database rows by cascade. Object deletion joins the
-  same workflow after file records and storage adapters exist.
-- Request throttling is per email in PostgreSQL. Production still needs reverse
-  proxy/IP rate limits and abuse monitoring.
+- Demo workspaces seed three independent sample products; intake history starts
+  empty by design.
+- Expired-demo and registered-account cleanup delete private objects before
+  database cascade. Failed account cleanup is durable/retryable; orphan objects
+  are reconciled after a grace period.
+- Email challenges are rate-limited per address and API/auth traffic per client
+  IP. Production still needs an alert destination and correctly configured
+  trusted-proxy boundary.
 - Email-bound invitations currently expose a secret for the administrator to
   send. Production provider selection and automatic invitation-email delivery
   remain pending.
 - WeChat is a reserved `auth_identities.provider` value only. No WeChat login or
   binding UI is shipped.
-- Browser acceptance is currently manual and evidence-backed; a repeatable H5
-  browser E2E suite is still required before deployment.
+- Playwright covers isolated demos, SMTP-code invitation registration, and H5
+  account-deletion submission. Production-like SMTP delivery and deletion of a
+  test account containing real provider uploads remain deployment gates.

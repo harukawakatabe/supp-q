@@ -5,17 +5,17 @@ recognition, scheduling, intake, inventory, and reminder service.
 
 ## Current status
 
-Phase 0, Phase 1 identity, the Phase 2 deterministic core, and the Phase 3
-capture/recognition foundation are implemented and verified locally. The H5
-can persist three private label images, poll durable recognition jobs, expose
-explicitly fake development candidates, and create a product only after human
-review. New demo sessions receive isolated sample products.
+The H5 launch-beta loop is implemented and verified locally: isolated demo,
+invitation identity, Today/Records/Add/Cabinet/Me, product/schedule editing,
+restock, intake/backfill/exact undo, private three-image recognition with human
+confirmation, account/file deletion, and restart persistence. Production
+Compose/Caddy, readiness/metrics, encrypted backup/restore scripts, recognition
+evaluation, and Playwright CI are included.
 
-Nothing is deployed to production. The live vision adapter exists but has no
-configured provider credentials and has not passed a private evaluation set;
-therefore live OCR/LLM recognition is not a verified capability. AI explanation,
-reminders, records and restock UI, production email, automated browser E2E,
-backups, and production deployment remain unimplemented.
+Nothing is deployed to production. Live recognition has not passed an
+authorized private 30–50-image evaluation, and production infrastructure has
+not been selected. The accurate status is a deployable local release candidate,
+not an online service. See `docs/PROJECT_STATUS.md` for the exact external gate.
 
 ## Start locally
 
@@ -32,9 +32,10 @@ Then open:
 - Mailpit: <http://127.0.0.1:8025>
 - local S3: <http://127.0.0.1:8333>
 
-Use `make test`, `make check`, `make build`, `make status`, and `make down` for
-the corresponding lifecycle steps. `Makefile` supports both the standard
-`docker compose` plugin and the Homebrew `docker-compose` binary.
+Use `make test`, `make check`, `make build`, `make status`,
+`make test-restart-persistence`, and `make down` for the corresponding lifecycle
+steps. `Makefile` supports both the standard `docker compose` plugin and the
+Homebrew `docker-compose` binary.
 
 ## Project truth
 

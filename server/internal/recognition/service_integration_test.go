@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -14,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"suppq.local/server/internal/catalog"
 	"suppq.local/server/internal/provider"
+	"suppq.local/server/internal/storage"
 	"suppq.local/server/migrations"
 )
 
@@ -48,6 +50,25 @@ func (store *memoryObjects) Delete(_ context.Context, key string) error {
 	defer store.mu.Unlock()
 	delete(store.items, key)
 	return nil
+}
+func (store *memoryObjects) List(_ context.Context, prefix, after string, limit int) ([]storage.ObjectInfo, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	items := []storage.ObjectInfo{}
+	keys := make([]string, 0, len(store.items))
+	for key := range store.items {
+		if strings.HasPrefix(key, prefix) && key > after {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		items = append(items, storage.ObjectInfo{Key: key, LastModified: time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)})
+		if limit > 0 && len(items) >= limit {
+			break
+		}
+	}
+	return items, nil
 }
 
 func TestRecognitionPersistenceWorkerConfirmationAndIsolation(t *testing.T) {
@@ -210,6 +231,33 @@ func TestRecognitionPersistenceWorkerConfirmationAndIsolation(t *testing.T) {
 	}
 	if !storageFailureFound || storageSet.Status != "processing" {
 		t.Fatalf("retryable storage failure must stay queued with retained metadata: %+v", storageSet)
+	}
+
+	deletionSet, err := service.CreateSet(ctx, other, []Upload{{Role: "front", Name: "front.png", DeclaredMIME: "image/png", Data: image}, {Role: "facts", Name: "facts.png", DeclaredMIME: "image/png", Data: image}, {Role: "expiry", Name: "expiry.png", DeclaredMIME: "image/png", Data: image}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(deletionSet.Files) != 3 {
+		t.Fatal("expected account cleanup fixture files")
+	}
+	deletedObjects, err := service.DeleteUserObjects(ctx, other.UserID)
+	if err != nil || deletedObjects != 3 {
+		t.Fatalf("account object cleanup failed: deleted=%d err=%v", deletedObjects, err)
+	}
+	objects.mu.Lock()
+	objects.items["zz-orphan/old.png"] = append([]byte(nil), image...)
+	objectCount := len(objects.items)
+	objects.mu.Unlock()
+	orphans := 0
+	for range objectCount + 1 {
+		deleted, reconcileErr := service.ReconcileOrphanObjects(ctx, time.Hour, 1)
+		if reconcileErr != nil {
+			t.Fatal(reconcileErr)
+		}
+		orphans += deleted
+	}
+	if orphans != 1 {
+		t.Fatalf("paginated orphan reconciliation failed: deleted=%d", orphans)
 	}
 }
 

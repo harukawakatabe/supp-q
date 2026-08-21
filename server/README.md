@@ -1,17 +1,19 @@
 # Supp Q server
 
-One Go module with four independently runnable commands:
+One Go module with five independently runnable commands:
 
 - `cmd/api` — HTTP API
 - `cmd/worker` — background worker process
 - `cmd/admin` — explicit administration commands
 - `cmd/migrate` — embedded append-only Goose migrations
+- `cmd/eval` — offline recognition quality-gate report
 
-The API exposes operational endpoints, Phase 1 identity, the Phase 2 product
-and intake domain, and Phase 3 private upload/recognition/confirmation routes.
-The worker processes durable recognition jobs through an explicit fake
-development provider or a configured OpenAI-compatible vision adapter. AI
-explanation and reminder routes are not implemented.
+The API exposes operations, identity/account deletion, product/schedule/batch,
+intake/history, and private upload/recognition/confirmation routes. The worker
+processes recognition, expired-demo/account object cleanup, orphan
+reconciliation, and a readiness heartbeat. Recognition uses an explicit Fake
+development provider or configured live adapters. Reminder times/summaries are
+domain/client state; Web Push and product AI explanation are deferred.
 
 ## Commands
 
@@ -21,7 +23,9 @@ go test ./...
 go run ./cmd/api
 go run ./cmd/worker
 go run ./cmd/admin status
+go run ./cmd/admin validate-config --worker
 go run ./cmd/migrate
+go run ./cmd/eval -input /absolute/path/to/results.json
 ```
 
 Environment variables are read from the process. The Go programs deliberately
@@ -31,8 +35,10 @@ the values in your shell.
 ## Operational endpoints
 
 - `GET /api/v1/health/live` — process is serving HTTP; no dependency assertion.
-- `GET /api/v1/health/ready` — process can authenticate to PostgreSQL and run a
-  ping within the configured timeout.
+- `GET /api/v1/health/ready` — database, private object bucket, worker heartbeat,
+  and recognition queue are available.
+- `GET /metrics` — internal Prometheus text for HTTP, queue, and worker state;
+  production Caddy denies this path externally.
 
 Every response includes `X-Request-ID`. A caller-supplied request ID is not
 trusted or reflected; the server generates its own identifier.

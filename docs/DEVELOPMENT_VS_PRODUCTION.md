@@ -16,8 +16,8 @@
 | Sessions | HttpOnly, SameSite=Lax over local HTTP | Secure, HttpOnly, SameSite=Lax and rotation |
 | Data | isolated identities; real domain and recognition records | tenant-scoped real user data |
 | Logs | console JSON | retained structured logs and alerts |
-| Monitoring | local health output | API, worker, DB, queue, storage, provider metrics |
-| Backup | disposable | scheduled encrypted backup and restore drill |
+| Monitoring | readiness + local Prometheus text | internal scrape + external alert destination |
+| Backup | volumes + restart acceptance | scheduled encrypted DB/object backup and restore drill |
 | Demo cleanup | short intervals allowed in tests | 24 hours without activity |
 | Reminder | in-app | in-app for V1 |
 
@@ -66,6 +66,21 @@ requires complete credentials for every selected stage. Working credentials
 configure transport only; production acceptance additionally requires the
 private evaluation set. The 2026-08-02 synthetic live run is connectivity and
 ordering evidence, not real-label accuracy evidence.
+
+Production deployment assets live in `deploy/compose.production.yml` and
+`deploy/Caddyfile.production`. They enforce an internal backend network,
+read-only application containers, automatic HTTPS, security headers, private
+metrics routing, and migration-before-start ordering. Before deployment, run
+the no-network configuration preflight from the built server image:
+
+```bash
+/app/suppq-admin validate-config
+/app/suppq-admin validate-config --worker
+```
+
+Backup and restore commands are documented in `deploy/README.md`. Script
+availability is not restore evidence; production remains blocked until a real
+encrypted archive is restored into separate empty drill targets.
 
 ## Behavior differences that are forbidden
 

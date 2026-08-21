@@ -52,12 +52,16 @@ func main() {
 	recognitionService := recognition.New(pool, objectStore, catalogService)
 	identityService := identity.New(pool, mailer.SMTP{
 		Host: cfg.SMTPHost, Port: cfg.SMTPPort, From: cfg.SMTPFrom,
-		Username: cfg.SMTPUsername, Password: cfg.SMTPPassword,
+		Username: cfg.SMTPUsername, Password: cfg.SMTPPassword, RequireTLS: cfg.SMTPRequireTLS,
 	}, identity.Config{Pepper: cfg.TokenPepper, SessionTTL: cfg.SessionTTL, DemoTTL: cfg.DemoTTL, EmailCodeTTL: cfg.EmailCodeTTL}).WithDemoSeeder(catalogService)
+	checker := database.Checker{Pool: pool, Timeout: cfg.DatabaseTimeout}
 
 	handler := httpapi.New(httpapi.Dependencies{
 		AllowedOrigin: cfg.AllowedOrigin,
-		Database:      database.Checker{Pool: pool, Timeout: cfg.DatabaseTimeout},
+		Database:      checker,
+		Operations:    checker,
+		Storage:       objectStore,
+		WorkerMaxAge:  2 * time.Minute,
 		Logger:        logger,
 		Version:       version,
 		Identity:      identityService,
@@ -65,6 +69,7 @@ func main() {
 		Recognition:   recognitionService,
 		SessionCookie: cfg.SessionCookie,
 		CookieSecure:  cfg.CookieSecure,
+		TrustProxy:    cfg.TrustProxy,
 	})
 
 	server := &http.Server{

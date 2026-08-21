@@ -28,7 +28,6 @@ func NewError(code, message string) *Error { return &Error{Code: code, Message: 
 var (
 	ErrNotFound              = NewError("resource_not_found", "记录不存在。")
 	ErrInsufficientInventory = NewError("insufficient_inventory", "库存不足，未记录本次服用。")
-	ErrAlreadyUndone         = NewError("intake_already_undone", "该服用记录已经撤销。")
 )
 
 type Scope struct{ UserID, WorkspaceID string }
@@ -88,13 +87,38 @@ type CreateProductInput struct {
 	SourceRecognitionSetID    string            `json:"-"`
 }
 
+type UpdateProductInput struct {
+	Name                      string            `json:"name"`
+	Brand                     string            `json:"brand"`
+	ProductType               string            `json:"productType"`
+	Status                    string            `json:"status"`
+	Unit                      string            `json:"unit"`
+	DoseQuantity              float64           `json:"doseQuantity"`
+	DoseTimesPerDay           int               `json:"doseTimesPerDay"`
+	IngredientServingQuantity float64           `json:"ingredientServingQuantity"`
+	WithFood                  *bool             `json:"withFood"`
+	RestockThresholdDays      int               `json:"restockThresholdDays"`
+	ExpiryReminderDays        int               `json:"expiryReminderDays"`
+	Schedule                  ScheduleInput     `json:"schedule"`
+	Ingredients               []IngredientInput `json:"ingredients"`
+	EffectiveDate             string            `json:"effectiveDate"`
+}
+
 type ScheduleView struct {
-	Version       int            `json:"version"`
-	StartDate     string         `json:"startDate"`
-	Weekdays      []int          `json:"weekdays"`
-	DayCycle      DayCycleInput  `json:"dayCycle"`
-	LongCycle     LongCycleInput `json:"longCycle"`
-	ReminderTimes []string       `json:"reminderTimes"`
+	Version         int                `json:"version"`
+	StartDate       string             `json:"startDate"`
+	Weekdays        []int              `json:"weekdays"`
+	DayCycle        DayCycleInput      `json:"dayCycle"`
+	DayCycleHistory []DayCycleRuleView `json:"dayCycleHistory"`
+	LongCycle       LongCycleInput     `json:"longCycle"`
+	ReminderTimes   []string           `json:"reminderTimes"`
+}
+type DayCycleRuleView struct {
+	EffectiveDate string `json:"effectiveDate"`
+	Enabled       bool   `json:"enabled"`
+	CycleDays     int    `json:"cycleDays"`
+	TakeDays      int    `json:"takeDays"`
+	AnchorDate    string `json:"anchorDate"`
 }
 type BatchView struct {
 	ID              string    `json:"id"`
@@ -142,9 +166,15 @@ type Intake struct {
 	Quantity    float64          `json:"quantity"`
 	Source      string           `json:"source"`
 	Status      string           `json:"status"`
+	Note        string           `json:"note,omitempty"`
 	CreatedAt   time.Time        `json:"createdAt"`
 	RevokedAt   *time.Time       `json:"revokedAt,omitempty"`
 	Allocations []AllocationView `json:"allocations"`
+}
+type IntakeRecord struct {
+	Intake
+	ProductName string `json:"productName"`
+	ProductUnit string `json:"productUnit"`
 }
 type AllocationView struct {
 	BatchID     string  `json:"batchId"`
@@ -454,6 +484,124 @@ func (service *Service) ListProducts(ctx context.Context, scope Scope) ([]Produc
 	return items, nil
 }
 
+func normalizeUpdate(input UpdateProductInput, now time.Time) (UpdateProductInput, core.Schedule, time.Time, error) {
+	created, schedule, err := normalizeCreate(CreateProductInput{
+		Name: input.Name, Brand: input.Brand, ProductType: input.ProductType, Unit: input.Unit,
+		DoseQuantity: input.DoseQuantity, DoseTimesPerDay: input.DoseTimesPerDay,
+		IngredientServingQuantity: input.IngredientServingQuantity, WithFood: input.WithFood,
+		RestockThresholdDays: input.RestockThresholdDays, ExpiryReminderDays: input.ExpiryReminderDays,
+		Schedule: input.Schedule, OpeningBatch: BatchInput{Quantity: 1}, Ingredients: input.Ingredients,
+	}, now)
+	if err != nil {
+		return input, core.Schedule{}, time.Time{}, err
+	}
+	if input.Status == "" {
+		input.Status = "active"
+	}
+	if input.Status != "active" && input.Status != "paused" && input.Status != "depleted" {
+		return input, core.Schedule{}, time.Time{}, NewError("invalid_product", "产品状态只能设为使用中、已暂停或已耗尽。")
+	}
+	effectiveKey := strings.TrimSpace(input.EffectiveDate)
+	if effectiveKey == "" {
+		effectiveKey = core.DateKey(now)
+	}
+	effectiveDate, err := core.ParseDate(effectiveKey)
+	if err != nil || effectiveDate.Before(time.Date(now.Year(), now.Month(), now.Day(), 12, 0, 0, 0, time.UTC)) {
+		return input, core.Schedule{}, time.Time{}, NewError("invalid_schedule", "计划生效日期不能早于今天。")
+	}
+	input.Name, input.Brand, input.ProductType, input.Unit = created.Name, created.Brand, created.ProductType, created.Unit
+	input.DoseQuantity, input.DoseTimesPerDay = created.DoseQuantity, created.DoseTimesPerDay
+	input.IngredientServingQuantity, input.WithFood = created.IngredientServingQuantity, created.WithFood
+	input.RestockThresholdDays, input.ExpiryReminderDays = created.RestockThresholdDays, created.ExpiryReminderDays
+	input.Schedule, input.Ingredients, input.EffectiveDate = created.Schedule, created.Ingredients, effectiveKey
+	return input, schedule, effectiveDate, nil
+}
+
+// UpdateProduct changes the current product and schedule from EffectiveDate
+// forward. Day-cycle history is upserted by effective date so past calculations
+// remain stable when the user corrects the current anchor.
+func (service *Service) UpdateProduct(ctx context.Context, scope Scope, productID string, input UpdateProductInput) (Product, error) {
+	now := service.now()
+	normalized, schedule, effectiveDate, err := normalizeUpdate(input, now)
+	if err != nil {
+		return Product{}, err
+	}
+	dose, _ := core.QuantityFromFloat(normalized.DoseQuantity)
+	serving, _ := core.QuantityFromFloat(normalized.IngredientServingQuantity)
+	weekdays := make([]int16, len(schedule.Weekdays))
+	for index, value := range schedule.Weekdays {
+		weekdays[index] = int16(value)
+	}
+	tx, err := service.pool.Begin(ctx)
+	if err != nil {
+		return Product{}, err
+	}
+	defer tx.Rollback(ctx)
+	var lockedID, totalText string
+	if err = tx.QueryRow(ctx, `SELECT id FROM products WHERE id=$1 AND user_id=$2 AND workspace_id=$3 AND status<>'archived' FOR UPDATE`, productID, scope.UserID, scope.WorkspaceID).Scan(&lockedID); errors.Is(err, pgx.ErrNoRows) {
+		return Product{}, ErrNotFound
+	} else if err != nil {
+		return Product{}, err
+	}
+	if err = tx.QueryRow(ctx, `SELECT COALESCE(sum(current_quantity),0)::text FROM inventory_batches WHERE product_id=$1 AND user_id=$2 AND workspace_id=$3`, productID, scope.UserID, scope.WorkspaceID).Scan(&totalText); err != nil {
+		return Product{}, err
+	}
+	total, err := core.ParseQuantity(totalText)
+	if err != nil {
+		return Product{}, err
+	}
+	if total == 0 {
+		normalized.Status = "depleted"
+	} else if normalized.Status == "depleted" {
+		normalized.Status = "active"
+	}
+	if _, err = tx.Exec(ctx, `UPDATE products SET name=$1,brand=$2,product_type=$3,status=$4,unit=$5,dose_quantity=$6,dose_times_per_day=$7,ingredient_serving_quantity=$8,with_food=$9,restock_threshold_days=$10,expiry_reminder_days=$11,updated_at=$12 WHERE id=$13 AND user_id=$14 AND workspace_id=$15`, normalized.Name, normalized.Brand, normalized.ProductType, normalized.Status, normalized.Unit, dose.DatabaseString(), normalized.DoseTimesPerDay, serving.DatabaseString(), normalized.WithFood, normalized.RestockThresholdDays, normalized.ExpiryReminderDays, now, productID, scope.UserID, scope.WorkspaceID); err != nil {
+		return Product{}, err
+	}
+	result, err := tx.Exec(ctx, `UPDATE product_schedules SET version=version+1,start_date=$1,weekdays=$2,day_cycle_enabled=$3,day_cycle_days=$4,day_take_days=$5,day_anchor_date=$6,long_cycle_enabled=$7,long_take_weeks=$8,long_rest_weeks=$9,long_start_date=$10,reminder_times=$11,updated_at=$12 WHERE product_id=$13 AND user_id=$14 AND workspace_id=$15`, schedule.StartDate, weekdays, schedule.DayCycle.Enabled, schedule.DayCycle.CycleDays, schedule.DayCycle.TakeDays, schedule.DayCycle.AnchorDate, schedule.LongCycle.Enabled, schedule.LongCycle.TakeWeeks, schedule.LongCycle.RestWeeks, schedule.LongCycle.StartDate, schedule.ReminderTimes, now, productID, scope.UserID, scope.WorkspaceID)
+	if err != nil {
+		return Product{}, err
+	}
+	if result.RowsAffected() != 1 {
+		return Product{}, ErrNotFound
+	}
+	versionID, err := newUUID()
+	if err != nil {
+		return Product{}, err
+	}
+	if _, err = tx.Exec(ctx, `INSERT INTO day_cycle_versions (id,user_id,workspace_id,product_id,effective_date,enabled,cycle_days,take_days,anchor_date,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT (product_id,effective_date) DO UPDATE SET enabled=EXCLUDED.enabled,cycle_days=EXCLUDED.cycle_days,take_days=EXCLUDED.take_days,anchor_date=EXCLUDED.anchor_date,created_at=EXCLUDED.created_at`, versionID, scope.UserID, scope.WorkspaceID, productID, effectiveDate, schedule.DayCycle.Enabled, schedule.DayCycle.CycleDays, schedule.DayCycle.TakeDays, schedule.DayCycle.AnchorDate, now); err != nil {
+		return Product{}, err
+	}
+	if _, err = tx.Exec(ctx, `DELETE FROM product_ingredients WHERE product_id=$1 AND user_id=$2 AND workspace_id=$3`, productID, scope.UserID, scope.WorkspaceID); err != nil {
+		return Product{}, err
+	}
+	for _, ingredient := range normalized.Ingredients {
+		id, createErr := newUUID()
+		if createErr != nil {
+			return Product{}, createErr
+		}
+		key := normalizeIngredientKey(ingredient.Key, ingredient.Name)
+		name, unit := strings.TrimSpace(ingredient.Name), strings.TrimSpace(ingredient.Unit)
+		if name == "" {
+			name = key
+		}
+		if unit == "" {
+			unit = "mg"
+		}
+		amount, parseErr := core.QuantityFromFloat(ingredient.Amount)
+		if parseErr != nil {
+			return Product{}, NewError("invalid_ingredient", "成分剂量无效。")
+		}
+		if _, err = tx.Exec(ctx, `INSERT INTO product_ingredients (id,user_id,workspace_id,product_id,ingredient_key,name,amount,unit,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`, id, scope.UserID, scope.WorkspaceID, productID, key, name, amount.DatabaseString(), unit, now); err != nil {
+			return Product{}, err
+		}
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return Product{}, err
+	}
+	return service.GetProduct(ctx, scope, productID)
+}
+
 func loadProduct(ctx context.Context, db dbtx, scope Scope, id string, now time.Time) (Product, error) {
 	var product Product
 	var doseText, servingText string
@@ -511,6 +659,7 @@ func loadProduct(ctx context.Context, db dbtx, scope Scope, id string, now time.
 		return Product{}, err
 	}
 	history := []core.DayCycleRule{}
+	product.Schedule.DayCycleHistory = []DayCycleRuleView{}
 	for historyRows.Next() {
 		var rule core.DayCycleRule
 		if err = historyRows.Scan(&rule.EffectiveDate, &rule.Enabled, &rule.CycleDays, &rule.TakeDays, &rule.AnchorDate); err != nil {
@@ -518,6 +667,7 @@ func loadProduct(ctx context.Context, db dbtx, scope Scope, id string, now time.
 			return Product{}, err
 		}
 		history = append(history, rule)
+		product.Schedule.DayCycleHistory = append(product.Schedule.DayCycleHistory, DayCycleRuleView{EffectiveDate: core.DateKey(rule.EffectiveDate), Enabled: rule.Enabled, CycleDays: rule.CycleDays, TakeDays: rule.TakeDays, AnchorDate: core.DateKey(rule.AnchorDate)})
 	}
 	err = historyRows.Err()
 	historyRows.Close()
@@ -827,7 +977,7 @@ func loadIntake(ctx context.Context, db dbtx, scope Scope, id string) (Intake, e
 	var date time.Time
 	var quantityText string
 	var timeText string
-	err := db.QueryRow(ctx, `SELECT id,product_id,intake_date,COALESCE(to_char(intake_time,'HH24:MI'),''),quantity::text,source,status,created_at,revoked_at FROM intake_records WHERE id=$1 AND user_id=$2 AND workspace_id=$3`, id, scope.UserID, scope.WorkspaceID).Scan(&intake.ID, &intake.ProductID, &date, &timeText, &quantityText, &intake.Source, &intake.Status, &intake.CreatedAt, &intake.RevokedAt)
+	err := db.QueryRow(ctx, `SELECT id,product_id,intake_date,COALESCE(to_char(intake_time,'HH24:MI'),''),quantity::text,source,status,note,created_at,revoked_at FROM intake_records WHERE id=$1 AND user_id=$2 AND workspace_id=$3`, id, scope.UserID, scope.WorkspaceID).Scan(&intake.ID, &intake.ProductID, &date, &timeText, &quantityText, &intake.Source, &intake.Status, &intake.Note, &intake.CreatedAt, &intake.RevokedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Intake{}, ErrNotFound
 	}
@@ -863,6 +1013,48 @@ func loadIntake(ctx context.Context, db dbtx, scope Scope, id string) (Intake, e
 		intake.Allocations = append(intake.Allocations, item)
 	}
 	return intake, rows.Err()
+}
+
+func (service *Service) ListIntakes(ctx context.Context, scope Scope, fromKey, toKey string) ([]IntakeRecord, error) {
+	now := service.now()
+	if strings.TrimSpace(toKey) == "" {
+		toKey = core.DateKey(now)
+	}
+	to, err := core.ParseDate(toKey)
+	if err != nil {
+		return nil, NewError("invalid_date", "结束日期必须使用 YYYY-MM-DD。")
+	}
+	if strings.TrimSpace(fromKey) == "" {
+		fromKey = core.DateKey(to.AddDate(0, 0, -29))
+	}
+	from, err := core.ParseDate(fromKey)
+	if err != nil {
+		return nil, NewError("invalid_date", "开始日期必须使用 YYYY-MM-DD。")
+	}
+	if from.After(to) || to.Sub(from) > 366*24*time.Hour {
+		return nil, NewError("invalid_date", "记录查询范围必须按时间顺序且不能超过 366 天。")
+	}
+	rows, err := service.pool.Query(ctx, `SELECT i.id,i.product_id,i.intake_date,COALESCE(to_char(i.intake_time,'HH24:MI'),''),i.quantity::text,i.source,i.status,i.note,i.created_at,i.revoked_at,p.name,p.unit FROM intake_records i JOIN products p ON p.id=i.product_id AND p.user_id=i.user_id AND p.workspace_id=i.workspace_id WHERE i.user_id=$1 AND i.workspace_id=$2 AND i.intake_date BETWEEN $3 AND $4 ORDER BY i.intake_date DESC,i.created_at DESC LIMIT 1000`, scope.UserID, scope.WorkspaceID, from, to)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []IntakeRecord{}
+	for rows.Next() {
+		var item IntakeRecord
+		var date time.Time
+		var quantityText string
+		if err = rows.Scan(&item.ID, &item.ProductID, &date, &item.Time, &quantityText, &item.Source, &item.Status, &item.Note, &item.CreatedAt, &item.RevokedAt, &item.ProductName, &item.ProductUnit); err != nil {
+			return nil, err
+		}
+		quantity, parseErr := core.ParseQuantity(quantityText)
+		if parseErr != nil {
+			return nil, parseErr
+		}
+		item.Date, item.Quantity, item.Allocations = core.DateKey(date), quantity.Float64(), []AllocationView{}
+		items = append(items, item)
+	}
+	return items, rows.Err()
 }
 
 func (service *Service) UndoIntake(ctx context.Context, scope Scope, id string) (Intake, Product, error) {
@@ -1019,7 +1211,19 @@ func scheduleFromView(view ScheduleView) (core.Schedule, error) {
 	if err != nil {
 		return core.Schedule{}, err
 	}
-	return core.NormalizeSchedule(core.Schedule{StartDate: start, Weekdays: view.Weekdays, DayCycle: core.DayCycle{Enabled: view.DayCycle.Enabled, CycleDays: view.DayCycle.CycleDays, TakeDays: view.DayCycle.TakeDays, AnchorDate: dayAnchor}, LongCycle: core.LongCycle{Enabled: view.LongCycle.Enabled, TakeWeeks: view.LongCycle.TakeWeeks, RestWeeks: view.LongCycle.RestWeeks, StartDate: longStart}, ReminderTimes: view.ReminderTimes})
+	history := make([]core.DayCycleRule, 0, len(view.DayCycleHistory))
+	for _, item := range view.DayCycleHistory {
+		effective, parseErr := core.ParseDate(item.EffectiveDate)
+		if parseErr != nil {
+			return core.Schedule{}, parseErr
+		}
+		anchor, parseErr := core.ParseDate(item.AnchorDate)
+		if parseErr != nil {
+			return core.Schedule{}, parseErr
+		}
+		history = append(history, core.DayCycleRule{EffectiveDate: effective, Enabled: item.Enabled, CycleDays: item.CycleDays, TakeDays: item.TakeDays, AnchorDate: anchor})
+	}
+	return core.NormalizeSchedule(core.Schedule{StartDate: start, Weekdays: view.Weekdays, DayCycle: core.DayCycle{Enabled: view.DayCycle.Enabled, CycleDays: view.DayCycle.CycleDays, TakeDays: view.DayCycle.TakeDays, AnchorDate: dayAnchor, History: history}, LongCycle: core.LongCycle{Enabled: view.LongCycle.Enabled, TakeWeeks: view.LongCycle.TakeWeeks, RestWeeks: view.LongCycle.RestWeeks, StartDate: longStart}, ReminderTimes: view.ReminderTimes})
 }
 
 func (service *Service) EnsureDemo(ctx context.Context, scope Scope) error {

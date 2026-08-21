@@ -38,8 +38,41 @@ therefore uses actively maintained SeaweedFS only as a local S3-compatible
 sandbox. Production remains private Tencent COS or Alibaba OSS behind a storage
 adapter; SeaweedFS is not a production commitment.
 
-## Production
+## Production release candidate
 
-`Caddyfile.production.example` is a non-secret template, not a deployable final
-configuration. Production still requires selected domains, TLS-ready DNS,
-secrets, external backup placement, monitoring, and live provider verification.
+`compose.production.yml` runs a one-shot migration followed by independent API,
+worker, H5, and Caddy edge services. Start from the non-secret examples:
+
+- `api.env.production.example`
+- `worker.env.production.example`
+- `backup.env.example`
+
+Store filled files outside the checkout (for example under root-readable
+`/etc/suppq/`) and never commit them. Validate interpolation before mutation:
+
+```bash
+SUPPQ_HOSTNAME=suppq.example.com \
+SUPPQ_ACME_EMAIL=ops@example.com \
+SUPPQ_API_ENV_FILE=/etc/suppq/api.env \
+SUPPQ_WORKER_ENV_FILE=/etc/suppq/worker.env \
+docker compose -f deploy/compose.production.yml config
+```
+
+Then run the server-image configuration preflights with the corresponding
+environment. `Caddyfile.production` obtains HTTPS automatically, denies public
+`/metrics`, and applies CSP/HSTS/COOP and other security headers.
+
+Encrypted database + object backups:
+
+```bash
+./scripts/backup.sh /etc/suppq/backup.env
+./scripts/restore-drill.sh /etc/suppq/backup.env /off-host/suppq-TIMESTAMP.tar.age
+```
+
+Restore targets must be separate, empty, and contain `drill` in both the
+database URL and object-bucket name. The scripts require PostgreSQL client
+tools, MinIO `mc`, and `age` on the operations host.
+
+These assets are deployable but not accepted production evidence until domains,
+TLS-ready DNS, secrets, external backup/monitoring, a real restore drill, and a
+private live-provider evaluation are complete.

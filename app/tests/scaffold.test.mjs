@@ -2,13 +2,16 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-test("Phase 2 declares Today, cabinet, product, authentication, and administration pages", async () => {
+test("V1 declares Today, records, cabinet, product, account, authentication, and administration pages", async () => {
   const pages = JSON.parse(await readFile(new URL("../src/pages.json", import.meta.url), "utf8"));
   assert.deepEqual(pages.pages.map((item) => item.path), [
     "pages/today/index",
     "pages/auth/index",
+    "pages/records/index",
     "pages/cabinet/index",
     "pages/product/add",
+    "pages/product/detail",
+    "pages/me/index",
     "pages/admin/invitations",
   ]);
 });
@@ -46,6 +49,19 @@ test("authentication UI tells users that demo data is not migrated", async () =>
   const page = await readFile(new URL("../src/pages/auth/index.vue", import.meta.url), "utf8");
   assert.match(page, /演示数据不会迁移/);
   assert.match(page, /24 小时无活动后删除/);
+});
+
+test("V1 records, product maintenance, and account deletion paths call real APIs", async () => {
+  const records = await readFile(new URL("../src/pages/records/index.vue", import.meta.url), "utf8");
+  const detail = await readFile(new URL("../src/pages/product/detail.vue", import.meta.url), "utf8");
+  const me = await readFile(new URL("../src/pages/me/index.vue", import.meta.url), "utf8");
+  const api = await readFile(new URL("../src/services/api.ts", import.meta.url), "utf8");
+  assert.match(records, /listIntakes/);
+  assert.match(records, /source:\s*recordDate\.value\s*===\s*to\.value\s*\?\s*"ad_hoc"\s*:\s*"backfill"/);
+  assert.match(detail, /updateProduct/);
+  assert.match(detail, /addBatch/);
+  assert.match(me, /deleteAccount/);
+  assert.match(api, /\/account/);
 });
 
 test("semantic layout elements use border-box sizing", async () => {

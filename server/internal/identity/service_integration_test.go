@@ -180,6 +180,31 @@ func TestIdentityInvitationAndDemoLifecycle(t *testing.T) {
 		t.Fatalf("expected one successful and one rejected concurrent claim, got %d and %d", successes, rejected)
 	}
 
+	deletionSession, err := service.PasswordLogin(ctx, "person@example.test", "member-new-password-456", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = service.RequestAccountDeletion(ctx, deletionSession.Actor, "wrong@example.test"); !errors.Is(err, ErrInvalidConfirmation) {
+		t.Fatalf("account deletion must require exact email confirmation, got %v", err)
+	}
+	if err = service.RequestAccountDeletion(ctx, deletionSession.Actor, "person@example.test"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = service.ActorForToken(ctx, deletionSession.Token, false); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("account deletion must invalidate sessions immediately, got %v", err)
+	}
+	cleanupUserID, claimed, err := service.ClaimAccountCleanup(ctx)
+	if err != nil || !claimed || cleanupUserID != deletionSession.Actor.UserID {
+		t.Fatalf("account cleanup was not claimable: user=%s claimed=%v err=%v", cleanupUserID, claimed, err)
+	}
+	if err = service.CompleteAccountCleanup(ctx, cleanupUserID); err != nil {
+		t.Fatal(err)
+	}
+	var deletedAccountCount int
+	if err = pool.QueryRow(ctx, `SELECT count(*) FROM users WHERE id=$1`, cleanupUserID).Scan(&deletedAccountCount); err != nil || deletedAccountCount != 0 {
+		t.Fatalf("registered account was not deleted: count=%d err=%v", deletedAccountCount, err)
+	}
+
 	deleted, err := service.CleanupExpiredDemos(ctx, 100)
 	if err != nil {
 		t.Fatal(err)

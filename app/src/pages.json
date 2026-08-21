@@ -15,6 +15,13 @@
       }
     },
     {
+      "path": "pages/records/index",
+      "style": {
+        "navigationStyle": "custom",
+        "navigationBarTitleText": "服用记录"
+      }
+    },
+    {
       "path": "pages/cabinet/index",
       "style": {
         "navigationStyle": "custom",
@@ -26,6 +33,20 @@
       "style": {
         "navigationStyle": "custom",
         "navigationBarTitleText": "添加产品"
+      }
+    },
+    {
+      "path": "pages/product/detail",
+      "style": {
+        "navigationStyle": "custom",
+        "navigationBarTitleText": "产品详情"
+      }
+    },
+    {
+      "path": "pages/me/index",
+      "style": {
+        "navigationStyle": "custom",
+        "navigationBarTitleText": "我的"
       }
     },
     {

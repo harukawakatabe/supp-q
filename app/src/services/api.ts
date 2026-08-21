@@ -41,7 +41,7 @@ export class APIError extends Error {
 
 const publicApiBase = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/$/, "");
 
-async function apiRequest<T>(path: string, method: "GET" | "POST" | "DELETE" = "GET", data?: object, headers?: Record<string, string>): Promise<T> {
+async function apiRequest<T>(path: string, method: "GET" | "POST" | "PUT" | "DELETE" = "GET", data?: object, headers?: Record<string, string>): Promise<T> {
   const response = await uni.request({
     url: `${publicApiBase}/api/v1${path}`,
     method,
@@ -97,6 +97,10 @@ export function logout(): Promise<void> {
   return apiRequest("/auth/logout", "POST");
 }
 
+export function deleteAccount(confirmation: string): Promise<{ status: string }> {
+  return apiRequest("/account", "DELETE", { confirmation });
+}
+
 export async function listInvitations(): Promise<Invitation[]> {
   const result = await apiRequest<{ items: Invitation[] }>("/admin/invitations");
   return result.items;
@@ -115,6 +119,7 @@ export type Schedule = {
   startDate: string;
   weekdays: number[];
   dayCycle: { enabled: boolean; cycleDays: number; takeDays: number; anchorDate: string };
+  dayCycleHistory?: Array<{ effectiveDate: string; enabled: boolean; cycleDays: number; takeDays: number; anchorDate: string }>;
   longCycle: { enabled: boolean; takeWeeks: number; restWeeks: number; startDate: string };
   reminderTimes: string[];
 };
@@ -129,6 +134,8 @@ export type Product = {
   doseQuantity: number;
   doseTimesPerDay: number;
   dailyQuantity: number;
+  ingredientServingQuantity: number;
+  withFood?: boolean;
   currentQuantity: number;
   restockThresholdDays: number;
   expiryReminderDays: number;
@@ -136,6 +143,8 @@ export type Product = {
   batches: Array<{ id: string; initialQuantity: number; currentQuantity: number; expiryDate?: string; priceCny: number; createdAt: string }>;
   ingredients: Array<{ id: string; key: string; name: string; amount: number; unit: string }>;
   expiryRisk: { level: "none" | "safe" | "warn" | "danger"; message: string; expiryDate?: string; projectedFinishDate?: string; latestStartDate?: string };
+  createdAt: string;
+  updatedAt: string;
 };
 
 export type TodayItem = {
@@ -155,7 +164,10 @@ export type Intake = {
   quantity: number;
   source: string;
   status: "active" | "revoked";
+  note?: string;
 };
+
+export type IntakeRecord = Intake & { productName: string; productUnit: string };
 
 export async function getToday(date: string): Promise<TodayItem[]> {
   const result = await apiRequest<{ items: TodayItem[] }>(`/today?date=${encodeURIComponent(date)}`);
@@ -167,6 +179,36 @@ export async function listProducts(): Promise<Product[]> {
   return result.items;
 }
 
+export function getProduct(id: string): Promise<Product> {
+  return apiRequest(`/products/${encodeURIComponent(id)}`);
+}
+
+export type UpdateProductInput = {
+  name: string;
+  brand: string;
+  productType: Product["productType"];
+  status: "active" | "paused" | "depleted";
+  unit: string;
+  doseQuantity: number;
+  doseTimesPerDay: number;
+  ingredientServingQuantity: number;
+  withFood?: boolean;
+  restockThresholdDays: number;
+  expiryReminderDays: number;
+  schedule: Omit<Schedule, "version" | "dayCycleHistory">;
+  ingredients: Array<{ key: string; name: string; amount: number; unit: string }>;
+  effectiveDate: string;
+};
+
+export function updateProduct(id: string, input: UpdateProductInput): Promise<Product> {
+  return apiRequest(`/products/${encodeURIComponent(id)}`, "PUT", input);
+}
+
+export async function listIntakes(from: string, to: string): Promise<IntakeRecord[]> {
+  const result = await apiRequest<{ items: IntakeRecord[] }>(`/intakes?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
+  return result.items;
+}
+
 export function createProduct(input: object): Promise<Product> {
   return apiRequest("/products", "POST", input);
 }
@@ -175,7 +217,7 @@ export function addBatch(productId: string, input: { quantity: number; expiryDat
   return apiRequest(`/products/${encodeURIComponent(productId)}/batches`, "POST", input);
 }
 
-export async function createIntake(input: { productId: string; date: string; time: string; quantity: number; source: string }, idempotencyKey: string): Promise<{ intake: Intake; product: Product }> {
+export async function createIntake(input: { productId: string; date: string; time: string; quantity: number; source: string; note?: string }, idempotencyKey: string): Promise<{ intake: Intake; product: Product }> {
   return apiRequest("/intakes", "POST", input, { "Idempotency-Key": idempotencyKey });
 }
 

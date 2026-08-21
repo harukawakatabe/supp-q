@@ -11,8 +11,9 @@
 - Phase 1 implementation uses purpose-separated HMAC-SHA256 digests for
   sessions, invitations, and email codes; passwords use Argon2id.
 - Password reset invalidates all registered sessions.
-- Current application throttling is per email. Production still needs
-  reverse-proxy/IP limits and abuse monitoring.
+- Email challenge limits are enforced by identity and the API applies per-IP
+  total/authentication limits. Production must set trusted-proxy handling and
+  connect rate-limit/abuse metrics to an alert destination.
 
 ## Demo
 
@@ -29,8 +30,9 @@
 - Every private query filters by effective user and workspace.
 - Resource IDs are opaque but never treated as authorization.
 - Admin checks are separate from authentication.
-- Cross-user product, recognition-set, job, and file access has integration
-  coverage. Automated browser E2E authorization coverage remains pending.
+- Cross-user product, recognition-set, job, file, and intake access has
+  PostgreSQL integration coverage. Independent browser contexts also prove demo
+  workspace/product isolation.
 
 ## Uploads
 
@@ -40,10 +42,10 @@
 - Strip unsafe filenames and generate opaque object keys.
 - Clean failed, abandoned, expired-demo, and deleted-account objects.
 
-Phase 3 currently enforces signature/MIME/size validation, private bucket
-storage, opaque names, tenant-scoped no-store reads, and expired-demo cleanup.
-Account deletion and a reconciler for rare pre-transaction object orphans are
-still required; the checklist item above is not yet fully closed.
+The implementation enforces signature/MIME/size validation, private bucket
+storage, opaque names, tenant-scoped no-store reads, expired-demo cleanup,
+object-first registered-account deletion, and reconciliation of objects that
+have no live metadata row after a one-hour grace period.
 
 ## AI and OCR
 
@@ -74,5 +76,6 @@ boundary remains explicit.
 
 - Structured logs use request IDs and redacted identifiers.
 - Health checks separate API, database, worker, storage, and provider configuration.
-- Backups are encrypted and restored in a drill.
+- Backups must be encrypted and restored in a drill. Scripts exist, but no real
+  production destination/restore evidence exists yet.
 - Production secrets remain outside Git and source directories.

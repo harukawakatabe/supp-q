@@ -2,11 +2,13 @@ package mailer
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"net"
 	"net/mail"
 	"net/smtp"
 	"strings"
+	"time"
 )
 
 type LoginCodeSender interface {
@@ -14,11 +16,12 @@ type LoginCodeSender interface {
 }
 
 type SMTP struct {
-	Host     string
-	Port     string
-	From     string
-	Username string
-	Password string
+	Host       string
+	Port       string
+	From       string
+	Username   string
+	Password   string
+	RequireTLS bool
 }
 
 func (sender SMTP) SendLoginCode(ctx context.Context, recipient, code string) error {
@@ -44,17 +47,53 @@ func (sender SMTP) SendLoginCode(ctx context.Context, recipient, code string) er
 		"验证码 10 分钟内有效。如果不是你本人操作，请忽略此邮件。",
 	}, "\r\n")
 
-	done := make(chan error, 1)
-	go func() {
-		done <- smtp.SendMail(address, auth, from.Address, []string{recipient}, []byte(message))
-	}()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case err := <-done:
-		if err != nil {
-			return fmt.Errorf("send login code: %w", err)
-		}
-		return nil
+	dialer := net.Dialer{Timeout: 15 * time.Second}
+	connection, err := dialer.DialContext(ctx, "tcp", address)
+	if err != nil {
+		return fmt.Errorf("connect SMTP: %w", err)
 	}
+	defer connection.Close()
+	deadline := time.Now().Add(20 * time.Second)
+	if value, ok := ctx.Deadline(); ok && value.Before(deadline) {
+		deadline = value
+	}
+	_ = connection.SetDeadline(deadline)
+	client, err := smtp.NewClient(connection, sender.Host)
+	if err != nil {
+		return fmt.Errorf("start SMTP: %w", err)
+	}
+	defer client.Close()
+	if supported, _ := client.Extension("STARTTLS"); supported {
+		if err = client.StartTLS(&tls.Config{ServerName: sender.Host, MinVersion: tls.VersionTLS12}); err != nil {
+			return fmt.Errorf("start SMTP TLS: %w", err)
+		}
+	} else if sender.RequireTLS {
+		return fmt.Errorf("SMTP server does not offer STARTTLS")
+	}
+	if auth != nil {
+		if err = client.Auth(auth); err != nil {
+			return fmt.Errorf("authenticate SMTP: %w", err)
+		}
+	}
+	if err = client.Mail(from.Address); err != nil {
+		return fmt.Errorf("set SMTP sender: %w", err)
+	}
+	if err = client.Rcpt(recipient); err != nil {
+		return fmt.Errorf("set SMTP recipient: %w", err)
+	}
+	writer, err := client.Data()
+	if err != nil {
+		return fmt.Errorf("start SMTP message: %w", err)
+	}
+	if _, err = writer.Write([]byte(message)); err != nil {
+		_ = writer.Close()
+		return fmt.Errorf("write SMTP message: %w", err)
+	}
+	if err = writer.Close(); err != nil {
+		return fmt.Errorf("finish SMTP message: %w", err)
+	}
+	if err = client.Quit(); err != nil {
+		return fmt.Errorf("quit SMTP: %w", err)
+	}
+	return nil
 }

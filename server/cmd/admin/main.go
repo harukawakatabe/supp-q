@@ -13,13 +13,28 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: suppq-admin status | bootstrap-admin <email>")
+		fmt.Fprintln(os.Stderr, "usage: suppq-admin validate-config [--worker] | status | bootstrap-admin <email>")
 		os.Exit(2)
 	}
 
 	cfg, err := config.FromEnv()
 	if err != nil {
 		fail("configuration_invalid", err)
+	}
+	if os.Args[1] == "validate-config" {
+		if len(os.Args) == 3 && os.Args[2] == "--worker" {
+			if err := cfg.ValidateRecognitionWorker(); err != nil {
+				fail("worker_configuration_invalid", err)
+			}
+		} else if len(os.Args) != 2 {
+			fmt.Fprintln(os.Stderr, "usage: suppq-admin validate-config [--worker]")
+			os.Exit(2)
+		}
+		_ = json.NewEncoder(os.Stdout).Encode(map[string]string{
+			"environment": cfg.Environment,
+			"status":      "valid",
+		})
+		return
 	}
 
 	ctx := context.Background()
@@ -42,7 +57,7 @@ func main() {
 		return
 	}
 	if os.Args[1] != "status" || len(os.Args) != 2 {
-		fmt.Fprintln(os.Stderr, "usage: suppq-admin status | bootstrap-admin <email>")
+		fmt.Fprintln(os.Stderr, "usage: suppq-admin validate-config [--worker] | status | bootstrap-admin <email>")
 		os.Exit(2)
 	}
 	checker := database.Checker{Pool: pool, Timeout: cfg.DatabaseTimeout}

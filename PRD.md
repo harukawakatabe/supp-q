@@ -1,6 +1,6 @@
 # 小补Q / Supp Q PRD
 
-Status: architecture and product baseline  
+Status: H5 launch-beta scope and product baseline
 First surface: H5  
 Future surface: WeChat mini-program  
 UI language: Chinese  
@@ -33,7 +33,7 @@ or invitation-based account
 ### 3.1 Anonymous demo
 
 - A visitor without a registered session automatically receives an isolated `demo_ephemeral` user and demo workspace.
-- The workspace is seeded with sample products and records.
+- The workspace is seeded with sample products. Intake history starts empty.
 - Each visitor has separate data; there is no shared writable demo account.
 - Demo and registered users use the same domain services and persistence model.
 - Demo data expires after 24 hours without activity.
@@ -83,7 +83,6 @@ A minimal admin page supports:
 - H5 responsive application.
 - Isolated anonymous demo.
 - Invitation, registration, login, logout, password reset, and email-code login.
-- User profile and minimal health context.
 - Three-image capture or upload.
 - Asynchronous OCR/vision recognition.
 - Visible queued, processing, partial, failed, retry, and confirmation states.
@@ -94,12 +93,15 @@ A minimal admin page supports:
 - Daily intake, ad hoc intake, backfill, and exact undo.
 - Low-stock, projected finish, latest-start, and expiry risk.
 - In-app reminder state and summaries.
-- Product-level AI explanation that does not block core use.
 - Account data deletion and associated file cleanup.
 - Minimal invitation administration.
 
 ### Deferred
 
+- User profile and health context until a shipped function has a defined need
+  for each sensitive field.
+- Product-level AI explanation. Launch-beta value and safety do not depend on
+  model-generated advice; label recognition remains candidate-only.
 - H5 Web Push.
 - WeChat mini-program subscription messages.
 - WeChat login and identity binding UI.
@@ -117,13 +119,11 @@ Deferred work must remain visible in `docs/PROJECT_STATUS.md`.
 ### Public
 
 ```text
-Landing
-├── Product value
-├── Demo entry
-├── Login
-├── Invitation acceptance
-├── Invitation code
-└── Password reset
+Anonymous demo Today
+└── Authentication
+    ├── Login
+    ├── Invitation acceptance
+    └── Password reset
 ```
 
 ### Authenticated workspace
@@ -151,9 +151,7 @@ Desktop H5 uses the same entries in a left sidebar.
 
 ### Records
 
-- Intake calendar.
-- Daily records.
-- Ingredient records and source products.
+- Recent daily intake records.
 - Backfill and undo history.
 
 ### Add
@@ -172,21 +170,16 @@ choose input
 
 ### Cabinet
 
-- Active, paused, depleted, archived products.
-- Product overview.
-- Schedule.
-- Batches and inventory.
-- Label evidence and recognition history.
-- Ingredients.
-- Product-level AI explanation.
-- Operation history.
+- Active, paused, and depleted products.
+- Product overview and editing.
+- Schedule and reminder-time editing.
+- Batches, restock, inventory, and ingredients.
 
 ### Me
 
-- Profile and health context.
-- Account and bound identities.
+- Account identity, privacy copy, and deletion.
 - Invitation administration for admins.
-- Reminder settings.
+- Reminder summary and product-detail entry.
 - Privacy and data deletion.
 - Future export entry marked unavailable until implemented.
 
@@ -240,4 +233,3 @@ Rules:
 - Provider failure retains the user's upload and presents retry/manual entry.
 - Restarting API and worker does not lose permanent user state.
 - Backup restore is exercised before production launch.
-

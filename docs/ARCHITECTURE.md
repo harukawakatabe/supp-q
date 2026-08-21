@@ -1,9 +1,8 @@
 # Target Architecture
 
-Status: target design with locally verified Phase 0–3 foundations. Private
-capture, durable recognition jobs, and human confirmation are implemented;
-the live provider, AI explanation, reminder, and production-hardening sections
-remain unverified or target-only unless `PROJECT_STATUS.md` says otherwise.
+Status: locally verified H5 launch-beta implementation plus production release
+assets. Live-provider accuracy and external deployment remain unverified unless
+`PROJECT_STATUS.md` records accepted evidence.
 
 ## System
 
@@ -39,24 +38,28 @@ The client was bootstrapped from the official current
 pinned to `3.0.0-5010520260709002`; the lockfile, not this paragraph, is the
 dependency source of truth.
 
-The Go server will use one module with multiple commands:
+The Go server uses one module with multiple commands:
 
 ```text
 server/
 ├── cmd/
 │   ├── api/
 │   ├── worker/
-│   └── admin/
+│   ├── admin/
+│   ├── migrate/
+│   └── eval/
 └── internal/
-    ├── auth/
-    ├── invitation/
     ├── catalog/       product, schedule, batch and intake transactions
+    ├── config/
     ├── core/          deterministic quantity, schedule and FEFO rules
+    ├── database/
+    ├── evaluation/
+    ├── httpapi/
+    ├── identity/
+    ├── mailer/
+    ├── provider/
     ├── recognition/
-    ├── ai/
-    ├── notification/
-    ├── storage/
-    └── observability/
+    └── storage/
 ```
 
 This follows the Go convention of keeping server packages under `internal` and separate programs under `cmd`.
@@ -109,7 +112,7 @@ Core aggregates:
 
 ## API
 
-Contracts are defined in `contracts/openapi.yaml` when implementation begins.
+Implemented HTTP contracts are defined in `contracts/openapi.yaml`.
 
 General response requirements:
 
@@ -169,16 +172,18 @@ deterministic domain, and the Phase 3 capture/confirmation boundary:
 
 ```text
 GET /api/v1/health/live  → process liveness only
-GET /api/v1/health/ready → authenticated PostgreSQL ping
+GET /api/v1/health/ready → database + storage + worker + queue readiness
+GET /metrics             → internal Prometheus text metrics
 GET /api/v1/session      → resume session or create isolated demo
 POST /api/v1/auth/*      → email code, password, reset, logout
 GET|POST|DELETE /api/v1/admin/invitations/*
 GET|POST /api/v1/products
-GET /api/v1/products/{id}
+GET|PUT /api/v1/products/{id}
 POST /api/v1/products/{id}/batches
 GET /api/v1/today
-POST /api/v1/intakes
+GET|POST /api/v1/intakes
 DELETE /api/v1/intakes/{id}
+DELETE /api/v1/account
 POST /api/v1/recognition/sets
 GET /api/v1/recognition/sets/{id}
 POST /api/v1/recognition/jobs/{id}/retry
@@ -209,9 +214,11 @@ only when it clears a defined margin. Dual mode
 roughly doubles image-model cost and is intended for bounded evaluation, not an
 unnoticed production default.
 
-The worker deletes expired demo objects before the identity cascade. Product
-and intake writes remain synchronous transactions; AI explanation and reminder
-jobs are not implemented.
+The worker deletes expired-demo and account objects before the identity
+cascade, reconciles orphan objects, and writes a heartbeat used by readiness.
+Product and intake writes remain synchronous transactions. Reminder times and
+summaries are deterministic client/domain state; Web Push is deferred. AI
+explanation is outside the launch-beta scope under D-021.
 
 Identity details and the remaining security gaps are recorded in
 `docs/IDENTITY.md`; stable errors are in `docs/ERRORS.md`.

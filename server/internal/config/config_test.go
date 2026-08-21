@@ -11,6 +11,7 @@ func TestFromEnvRequiresDatabaseURL(t *testing.T) {
 
 func TestFromEnvRejectsDisabledTLSInProduction(t *testing.T) {
 	t.Setenv("SUPPQ_ENV", "production")
+	t.Setenv("SUPPQ_SMTP_REQUIRE_TLS", "true")
 	t.Setenv("SUPPQ_TOKEN_PEPPER", "production-secret-that-is-longer-than-thirty-two-characters")
 	t.Setenv("SUPPQ_SMTP_HOST", "smtp.example.com")
 	t.Setenv("SUPPQ_SMTP_FROM", "no-reply@example.com")
@@ -22,6 +23,7 @@ func TestFromEnvRejectsDisabledTLSInProduction(t *testing.T) {
 
 func TestFromEnvRejectsDisabledTLSForPostgresqlScheme(t *testing.T) {
 	t.Setenv("SUPPQ_ENV", "production")
+	t.Setenv("SUPPQ_SMTP_REQUIRE_TLS", "true")
 	t.Setenv("SUPPQ_TOKEN_PEPPER", "production-secret-that-is-longer-than-thirty-two-characters")
 	t.Setenv("SUPPQ_SMTP_HOST", "smtp.example.com")
 	t.Setenv("SUPPQ_SMTP_FROM", "no-reply@example.com")
@@ -33,6 +35,7 @@ func TestFromEnvRejectsDisabledTLSForPostgresqlScheme(t *testing.T) {
 
 func TestFromEnvRejectsDevelopmentPepperInProduction(t *testing.T) {
 	t.Setenv("SUPPQ_ENV", "production")
+	t.Setenv("SUPPQ_SMTP_REQUIRE_TLS", "true")
 	t.Setenv("SUPPQ_DATABASE_URL", "postgres://user:pass@db.example/suppq?sslmode=require")
 	t.Setenv("SUPPQ_SMTP_HOST", "smtp.example.com")
 	t.Setenv("SUPPQ_SMTP_FROM", "no-reply@example.com")
@@ -58,10 +61,13 @@ func TestFromEnvAcceptsLocalDefaults(t *testing.T) {
 
 func TestFromEnvRejectsFakeProviderInProduction(t *testing.T) {
 	t.Setenv("SUPPQ_ENV", "production")
+	t.Setenv("SUPPQ_SMTP_REQUIRE_TLS", "true")
 	t.Setenv("SUPPQ_DATABASE_URL", "postgres://user:pass@db.example/suppq?sslmode=require")
 	t.Setenv("SUPPQ_TOKEN_PEPPER", "production-secret-that-is-longer-than-thirty-two-characters")
 	t.Setenv("SUPPQ_SMTP_HOST", "smtp.example.com")
 	t.Setenv("SUPPQ_SMTP_FROM", "no-reply@example.com")
+	t.Setenv("SUPPQ_ALLOWED_ORIGIN", "https://app.example.com")
+	t.Setenv("SUPPQ_TRUST_PROXY", "true")
 	t.Setenv("SUPPQ_OBJECT_ENDPOINT", "s3.example.com")
 	t.Setenv("SUPPQ_OBJECT_ACCESS_KEY", "access")
 	t.Setenv("SUPPQ_OBJECT_SECRET_KEY", "secret")
@@ -116,10 +122,13 @@ func TestRecognitionWorkerDualModeRequiresDirectProvider(t *testing.T) {
 
 func TestFromEnvRequiresExplicitSecureObjectStorageInProduction(t *testing.T) {
 	t.Setenv("SUPPQ_ENV", "production")
+	t.Setenv("SUPPQ_SMTP_REQUIRE_TLS", "true")
 	t.Setenv("SUPPQ_DATABASE_URL", "postgres://user:pass@db.example/suppq?sslmode=require")
 	t.Setenv("SUPPQ_TOKEN_PEPPER", "production-secret-that-is-longer-than-thirty-two-characters")
 	t.Setenv("SUPPQ_SMTP_HOST", "smtp.example.com")
 	t.Setenv("SUPPQ_SMTP_FROM", "no-reply@example.com")
+	t.Setenv("SUPPQ_ALLOWED_ORIGIN", "https://app.example.com")
+	t.Setenv("SUPPQ_TRUST_PROXY", "true")
 	t.Setenv("SUPPQ_RECOGNITION_PROVIDER", "openai_vision")
 	t.Setenv("SUPPQ_RECOGNITION_BASE_URL", "https://vision.example.com/v1")
 	t.Setenv("SUPPQ_RECOGNITION_API_KEY", "test-secret")
@@ -147,5 +156,31 @@ func TestFromEnvRequiresExplicitSecureObjectStorageInProduction(t *testing.T) {
 	}
 	if err = cfg.ValidateRecognitionWorker(); err != nil {
 		t.Fatalf("expected complete recognition worker configuration to pass: %v", err)
+	}
+}
+
+func TestFromEnvRequiresProductionSMTPTLSAndHTTPSOrigin(t *testing.T) {
+	t.Setenv("SUPPQ_ENV", "production")
+	t.Setenv("SUPPQ_DATABASE_URL", "postgres://user:pass@db.example/suppq?sslmode=require")
+	t.Setenv("SUPPQ_TOKEN_PEPPER", "production-secret-that-is-longer-than-thirty-two-characters")
+	t.Setenv("SUPPQ_SMTP_HOST", "smtp.example.com")
+	t.Setenv("SUPPQ_SMTP_FROM", "no-reply@example.com")
+	t.Setenv("SUPPQ_OBJECT_ENDPOINT", "s3.example.com")
+	t.Setenv("SUPPQ_OBJECT_ACCESS_KEY", "access")
+	t.Setenv("SUPPQ_OBJECT_SECRET_KEY", "secret")
+	t.Setenv("SUPPQ_OBJECT_BUCKET", "suppq-private")
+	t.Setenv("SUPPQ_OBJECT_SECURE", "true")
+	t.Setenv("SUPPQ_ALLOWED_ORIGIN", "http://app.example.com")
+	t.Setenv("SUPPQ_TRUST_PROXY", "true")
+	if _, err := FromEnv(); err == nil {
+		t.Fatal("expected production SMTP without required TLS to fail")
+	}
+	t.Setenv("SUPPQ_SMTP_REQUIRE_TLS", "true")
+	if _, err := FromEnv(); err == nil {
+		t.Fatal("expected insecure production origin to fail")
+	}
+	t.Setenv("SUPPQ_ALLOWED_ORIGIN", "https://app.example.com")
+	if _, err := FromEnv(); err != nil {
+		t.Fatalf("expected hardened production transport configuration to pass: %v", err)
 	}
 }

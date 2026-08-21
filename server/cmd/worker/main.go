@@ -2,12 +2,14 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"suppq.local/server/internal/catalog"
 	"suppq.local/server/internal/config"
 	"suppq.local/server/internal/database"
@@ -65,7 +67,7 @@ func main() {
 	checker := database.Checker{Pool: pool, Timeout: cfg.DatabaseTimeout}
 	identityService := identity.New(pool, nil, identity.Config{Pepper: cfg.TokenPepper, SessionTTL: cfg.SessionTTL, DemoTTL: cfg.DemoTTL, EmailCodeTTL: cfg.EmailCodeTTL})
 	logger.Info("worker started", "environment", cfg.Environment, "version", version)
-	runCycle(ctx, logger, checker, identityService, recognitionService, recognizer)
+	runCycle(ctx, logger, pool, checker, identityService, recognitionService, recognizer, version)
 
 	ticker := time.NewTicker(cfg.WorkerInterval)
 	defer ticker.Stop()
@@ -75,12 +77,12 @@ func main() {
 			logger.Info("worker stopped")
 			return
 		case <-ticker.C:
-			runCycle(ctx, logger, checker, identityService, recognitionService, recognizer)
+			runCycle(ctx, logger, pool, checker, identityService, recognitionService, recognizer, version)
 		}
 	}
 }
 
-func runCycle(ctx context.Context, logger *slog.Logger, checker database.Checker, identities *identity.Service, recognitions *recognition.Service, recognizer provider.Recognition) {
+func runCycle(ctx context.Context, logger *slog.Logger, pool *pgxpool.Pool, checker database.Checker, identities *identity.Service, recognitions *recognition.Service, recognizer provider.Recognition, workerVersion string) {
 	if !checkDatabase(ctx, logger, checker) {
 		return
 	}
@@ -96,6 +98,30 @@ func runCycle(ctx context.Context, logger *slog.Logger, checker database.Checker
 		}
 		processed++
 	}
+	accountUsersDeleted, accountObjectsDeleted := 0, 0
+	for accountUsersDeleted < 20 {
+		userID, claimed, cleanupErr := identities.ClaimAccountCleanup(ctx)
+		if cleanupErr != nil {
+			logger.Error("account cleanup claim failed", "error", cleanupErr)
+			break
+		}
+		if !claimed {
+			break
+		}
+		objectCount, cleanupErr := recognitions.DeleteUserObjects(ctx, userID)
+		accountObjectsDeleted += objectCount
+		if cleanupErr == nil {
+			cleanupErr = identities.CompleteAccountCleanup(ctx, userID)
+		}
+		if cleanupErr != nil {
+			logger.Error("account cleanup failed", "error", cleanupErr)
+			if failErr := identities.FailAccountCleanup(ctx, userID, cleanupErr); failErr != nil {
+				logger.Error("account cleanup retry scheduling failed", "error", failErr)
+			}
+			continue
+		}
+		accountUsersDeleted++
+	}
 	objectsDeleted, err := recognitions.CleanupExpiredDemoObjects(ctx, 1000)
 	if err != nil {
 		logger.Error("demo object cleanup failed", "error", err)
@@ -106,7 +132,15 @@ func runCycle(ctx context.Context, logger *slog.Logger, checker database.Checker
 		logger.Error("demo cleanup failed", "error", err)
 		return
 	}
-	logger.Info("worker cycle complete", "database", "ready", "demo_users_deleted", deleted, "demo_objects_deleted", objectsDeleted, "recognition_jobs_processed", processed, "recognition_provider", recognizer.Name())
+	orphansDeleted, err := recognitions.ReconcileOrphanObjects(ctx, time.Hour, 1000)
+	if err != nil {
+		logger.Error("orphan object reconciliation failed", "error", err)
+	}
+	details, _ := json.Marshal(map[string]int{"recognitionJobsProcessed": processed, "demoUsersDeleted": deleted, "demoObjectsDeleted": objectsDeleted, "accountUsersDeleted": accountUsersDeleted, "accountObjectsDeleted": accountObjectsDeleted, "orphanObjectsDeleted": orphansDeleted})
+	if _, heartbeatErr := pool.Exec(ctx, `INSERT INTO worker_heartbeats (worker_name,provider,version,details,last_seen_at) VALUES ('recognition-cleanup',$1,$2,$3,$4) ON CONFLICT (worker_name) DO UPDATE SET provider=EXCLUDED.provider,version=EXCLUDED.version,details=EXCLUDED.details,last_seen_at=EXCLUDED.last_seen_at`, recognizer.Name(), workerVersion, details, time.Now().UTC()); heartbeatErr != nil {
+		logger.Error("worker heartbeat persistence failed", "error", heartbeatErr)
+	}
+	logger.Info("worker cycle complete", "database", "ready", "demo_users_deleted", deleted, "demo_objects_deleted", objectsDeleted, "account_users_deleted", accountUsersDeleted, "account_objects_deleted", accountObjectsDeleted, "orphan_objects_deleted", orphansDeleted, "recognition_jobs_processed", processed, "recognition_provider", recognizer.Name())
 }
 
 func checkDatabase(ctx context.Context, logger *slog.Logger, checker database.Checker) bool {

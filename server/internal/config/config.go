@@ -23,11 +23,13 @@ type Config struct {
 	DemoTTL              time.Duration
 	EmailCodeTTL         time.Duration
 	CookieSecure         bool
+	TrustProxy           bool
 	SMTPHost             string
 	SMTPPort             string
 	SMTPFrom             string
 	SMTPUsername         string
 	SMTPPassword         string
+	SMTPRequireTLS       bool
 	ObjectEndpoint       string
 	ObjectAccessKey      string
 	ObjectSecretKey      string
@@ -57,7 +59,7 @@ func FromEnv() (Config, error) {
 	cfg := Config{
 		Environment:          envOr("SUPPQ_ENV", "development"),
 		HTTPAddr:             envOr("SUPPQ_HTTP_ADDR", "127.0.0.1:8080"),
-		AllowedOrigin:        envOr("SUPPQ_ALLOWED_ORIGIN", "http://127.0.0.1:5173"),
+		AllowedOrigin:        envOr("SUPPQ_ALLOWED_ORIGIN", "http://127.0.0.1:3000"),
 		DatabaseURL:          os.Getenv("SUPPQ_DATABASE_URL"),
 		TokenPepper:          envOr("SUPPQ_TOKEN_PEPPER", "suppq-development-pepper-not-for-production"),
 		SessionCookie:        envOr("SUPPQ_SESSION_COOKIE", "suppq_session"),
@@ -89,6 +91,8 @@ func FromEnv() (Config, error) {
 		VLModel:              strings.TrimSpace(os.Getenv("SUPPQ_VL_MODEL")),
 	}
 	cfg.ObjectSecure = strings.EqualFold(strings.TrimSpace(os.Getenv("SUPPQ_OBJECT_SECURE")), "true")
+	cfg.SMTPRequireTLS = strings.EqualFold(strings.TrimSpace(os.Getenv("SUPPQ_SMTP_REQUIRE_TLS")), "true")
+	cfg.TrustProxy = strings.EqualFold(strings.TrimSpace(os.Getenv("SUPPQ_TRUST_PROXY")), "true")
 
 	var err error
 	if cfg.DatabaseTimeout, err = durationOr("SUPPQ_DATABASE_TIMEOUT", 3*time.Second); err != nil {
@@ -124,6 +128,12 @@ func FromEnv() (Config, error) {
 		if strings.TrimSpace(os.Getenv("SUPPQ_SMTP_HOST")) == "" || strings.TrimSpace(os.Getenv("SUPPQ_SMTP_FROM")) == "" {
 			return Config{}, errors.New("SUPPQ_SMTP_HOST and SUPPQ_SMTP_FROM are required in production")
 		}
+		if !cfg.SMTPRequireTLS {
+			return Config{}, errors.New("SUPPQ_SMTP_REQUIRE_TLS must be true in production")
+		}
+		if !cfg.TrustProxy {
+			return Config{}, errors.New("SUPPQ_TRUST_PROXY must be true behind the production reverse proxy")
+		}
 		parsed, parseErr := url.Parse(cfg.DatabaseURL)
 		if parseErr != nil {
 			return Config{}, fmt.Errorf("SUPPQ_DATABASE_URL is invalid: %w", parseErr)
@@ -133,6 +143,10 @@ func FromEnv() (Config, error) {
 		}
 		if parsed.Query().Get("sslmode") == "disable" {
 			return Config{}, errors.New("SUPPQ_DATABASE_URL cannot disable TLS in production")
+		}
+		origin, originErr := url.Parse(cfg.AllowedOrigin)
+		if originErr != nil || origin.Scheme != "https" || origin.Host == "" || origin.Path != "" {
+			return Config{}, errors.New("SUPPQ_ALLOWED_ORIGIN must be an HTTPS origin without a path in production")
 		}
 		if strings.TrimSpace(os.Getenv("SUPPQ_OBJECT_ENDPOINT")) == "" || strings.TrimSpace(os.Getenv("SUPPQ_OBJECT_ACCESS_KEY")) == "" || strings.TrimSpace(os.Getenv("SUPPQ_OBJECT_SECRET_KEY")) == "" || strings.TrimSpace(os.Getenv("SUPPQ_OBJECT_BUCKET")) == "" {
 			return Config{}, errors.New("production object storage configuration is required")

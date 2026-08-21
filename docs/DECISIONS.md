@@ -24,6 +24,9 @@
 | D-018 | Development continues with the existing Kimi and vision-provider direction behind adapters. | Reuse known provider capability without coupling contracts or exposing keys; fake providers remain explicit test tools only. |
 | D-019 | Live recognition is evidence-first: image transcription is persisted before any structuring request. | Preserve the source text for retries and human review, prevent an unpersisted intermediate from becoming an opaque final candidate, and make provider comparison measurable. |
 | D-020 | The currently accepted development route is Qwen VL transcription → persisted text → Kimi structuring; direct VL and dual comparison remain configurable. | A live synthetic-label check on 2026-08-02 produced correct front/facts/expiry transcription and structured facts. The configured DeepSeek-OCR endpoint returned punctuation garbage and is rejected by the text-quality gate; this is not a production-provider acceptance decision. |
+| D-021 | The initial H5 launch-beta scope defers product-level AI explanation, superseding D-013 as a release requirement. | The deterministic record/inventory loop is independently valuable; unmeasured model advice would add privacy, safety, evaluation, and provider dependencies without unblocking a core task. |
+| D-022 | Health-context fields are deferred until a shipped function has a field-level purpose. | Data minimization is stronger than collecting sensitive context for an unused profile screen. |
+| D-023 | Non-H5 upload adapters are not an H5 launch gate. | The first surface is H5; WeChat remains explicitly deferred and must not hold back H5 acceptance. |
 
 ## Pending external choices
 

@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -78,6 +79,9 @@ type Service struct {
 	objects storage.ObjectStore
 	catalog *catalog.Service
 	now     func() time.Time
+
+	orphanMu     sync.Mutex
+	orphanCursor string
 }
 type storedObject struct{ fileID, key string }
 
@@ -457,6 +461,87 @@ func (service *Service) CleanupExpiredDemoObjects(ctx context.Context, limit int
 		if err = service.objects.Delete(ctx, value.key); err != nil {
 			return 0, err
 		}
+		if _, err = service.pool.Exec(ctx, `UPDATE files SET status='deleted',deleted_at=$1 WHERE id=$2 AND status='active'`, service.now(), value.id); err != nil {
+			return 0, err
+		}
 	}
 	return len(items), nil
+}
+
+func (service *Service) DeleteUserObjects(ctx context.Context, userID string) (int, error) {
+	deleted := 0
+	for {
+		rows, err := service.pool.Query(ctx, `SELECT id,object_key FROM files WHERE user_id=$1 AND status='active' ORDER BY created_at LIMIT 500`, userID)
+		if err != nil {
+			return deleted, err
+		}
+		type item struct{ id, key string }
+		items := []item{}
+		for rows.Next() {
+			var value item
+			if err = rows.Scan(&value.id, &value.key); err != nil {
+				rows.Close()
+				return deleted, err
+			}
+			items = append(items, value)
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return deleted, err
+		}
+		if len(items) == 0 {
+			return deleted, nil
+		}
+		for _, value := range items {
+			if err = service.objects.Delete(ctx, value.key); err != nil {
+				return deleted, err
+			}
+			result, updateErr := service.pool.Exec(ctx, `UPDATE files SET status='deleted',deleted_at=$1 WHERE id=$2 AND user_id=$3 AND status='active'`, service.now(), value.id, userID)
+			if updateErr != nil {
+				return deleted, updateErr
+			}
+			deleted += int(result.RowsAffected())
+		}
+	}
+}
+
+// ReconcileOrphanObjects removes objects that have no active database record.
+// The grace period protects uploads that are between object persistence and the
+// database transaction commit.
+func (service *Service) ReconcileOrphanObjects(ctx context.Context, grace time.Duration, limit int) (int, error) {
+	if grace < time.Minute {
+		grace = time.Hour
+	}
+	service.orphanMu.Lock()
+	defer service.orphanMu.Unlock()
+	objects, err := service.objects.List(ctx, "", service.orphanCursor, limit)
+	if err != nil {
+		return 0, err
+	}
+	if len(objects) == limit {
+		service.orphanCursor = objects[len(objects)-1].Key
+	} else {
+		service.orphanCursor = ""
+	}
+	cutoff := service.now().Add(-grace)
+	deleted := 0
+	for _, object := range objects {
+		if object.Key == "" || object.LastModified.IsZero() || object.LastModified.After(cutoff) {
+			continue
+		}
+		var exists bool
+		err = service.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM files WHERE object_key=$1 AND status='active')`, object.Key).Scan(&exists)
+		if err != nil {
+			return deleted, err
+		}
+		if exists {
+			continue
+		}
+		if err = service.objects.Delete(ctx, object.Key); err != nil {
+			return deleted, err
+		}
+		deleted++
+	}
+	return deleted, nil
 }

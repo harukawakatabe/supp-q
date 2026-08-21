@@ -6,6 +6,8 @@ node_modules/
 dist/
 unpackage/
 coverage/
+playwright-report/
+test-results/
 *.log
 tmp/
 .cache/

@@ -1,222 +1,161 @@
 # Project Status
 
-Last updated: 2026-08-02
+Last updated: 2026-08-21
+
+## Direct conclusion
+
+`uni/` is a locally verified H5 release candidate, not a live production
+service. The code now contains the launch-beta product loop, deployment
+composition, health/metrics, cleanup, backup/restore tooling, and automated
+acceptance. Production promotion is blocked by owner-provided infrastructure
+and a real-label provider evaluation, not by a hidden Fake-provider claim.
+
+Confidence:
+
+- **High** — local deterministic domain, identity, private-file orchestration,
+  H5 main path, restart persistence, production configuration guards.
+- **Medium** — production deployment assets and encrypted backup/restore
+  scripts are syntax/config validated but have not run against selected cloud
+  resources.
+- **Unknown** — production recognition accuracy, email delivery, backup
+  restore, DNS/TLS, and alert delivery until real services are selected and
+  accepted.
 
 ## Shipped to production
 
-Nothing in `uni/` is deployed or serving real users yet.
+Nothing. No production domain, server, database, object bucket, email provider,
+or accepted recognition provider has been supplied.
 
 ## Implemented and verified locally
 
-- Official current uni-app Vue 3 + TypeScript CLI dependency baseline, limited
-  to H5 and future WeChat mini-program targets.
-- Notion-like warm-neutral Today shell with explicit Phase 0 preview labeling.
-- Responsive mobile bottom navigation and desktop sidebar shell.
-- Client API health request with online/offline state.
-- H5 and `mp-weixin` builds, TypeScript check, and six client scaffold tests.
-- Go 1.26.5 module with independent API, worker, and admin commands.
-- Server-generated request IDs, JSON logs, strict configured-origin CORS,
-  liveness, and PostgreSQL-backed readiness.
-- Eight Go tests across configuration, CORS, liveness, and readiness behavior.
-- OpenAPI 3.1 operational contract for implemented health endpoints.
-- Pinned local stack: PostgreSQL 17.10, SeaweedFS 4.29, Mailpit 1.30.0,
-  Caddy 2.11.4, API, and worker.
-- Local S3 credentials and pre-created private `suppq-uploads` bucket.
-- Multi-stage non-root Go container and build-tested H5 container.
-- Make targets, tool versions, environment examples, and standalone CI file.
-- Goose 3.27.1 embedded, append-only identity migration and a migration gate
-  that completes before API and worker startup.
-- Isolated PostgreSQL-backed `demo_ephemeral` users, workspaces, HttpOnly
-  sessions, 24-hour rolling inactivity expiry, and worker cleanup.
-- Shared generic-code/email-bound invitation lifecycle with expiry, maximum
-  use, single-use email binding, revocation, acceptance rows, and atomic claim.
-- Email verification-code login through SMTP/Mailpit, Argon2id password login,
-  password reset with all-session invalidation, logout, and two email auth
-  identities bound to the same user.
-- Minimal H5 authentication and invitation-administration pages. Invitation
-  secrets are returned only once; the initial admin is bootstrapped by CLI.
-- Stable Phase 1 error registry and OpenAPI 0.2 identity contract.
-- PostgreSQL product, ingredient, schedule, day-cycle history, inventory batch,
-  intake, allocation, and inventory-event schema with user/workspace scope on
-  every private lookup and mutation.
-- Six-decimal fixed-point quantities, three-layer schedule intersection,
-  independent cycle anchors, historical day-cycle evaluation, projected finish,
-  latest-start, and expiry-risk calculations.
-- FEFO allocation with `NULL` expiry last, all-or-nothing stock checks,
-  idempotent intake creation, exact allocation-backed undo, and auditable stock
-  events in one transaction.
-- Deterministic demo seed containing D3, magnesium, and fish oil. Existing empty
-  demo workspaces are seeded lazily; registered workspaces remain empty.
-- Real H5 Today, Cabinet, and Add Product pages backed by the Phase 2 API. The
-  previous static preview cards were removed.
-- OpenAPI 0.3 domain contract and stable Phase 2 error codes.
-- Append-only Phase 3 schema for private file metadata, three-role recognition
-  sets, durable jobs, attempts, leases, result provenance, and idempotent
-  product linkage.
-- S3-compatible private object adapter, validated JPEG/PNG/WebP uploads (10 MB
-  each), opaque object keys, tenant-scoped no-store file delivery, and worker
-  cleanup before expired-demo database deletion.
-- PostgreSQL recognition worker with `SKIP LOCKED` claiming, five-minute leases,
-  bounded attempts, exponential retry, retained failures, and explicit
-  provider/model identity.
-- Explicit `fake:development`, OpenAI-compatible direct vision, and
-  evidence-first live adapters. The latter persists verbatim OCR/VL
-  transcription before Kimi structuring and can run `ocr_llm`, `direct_vl`, or
-  bounded `dual` comparison. Production configuration rejects fake or
-  incomplete stage settings.
-- Append-only migration `202608020004` stores OCR text, OCR provider/model,
-  timing, completion timestamp, selected route, stage trace, and an optional
-  direct-route comparison separately from the final candidate.
-- H5 confirmation exposes the saved OCR evidence and stage route for human
-  review; the API truncates nothing in persistence while the UI limits only its
-  visible preview.
-- H5 capture path for front, facts, and expiry images; persisted job polling,
-  per-job retry, manual fallback, visible Fake banner, editable prefill, and an
-  idempotent human-confirmation boundary before product creation.
-- OpenAPI 0.5 evidence-first recognition contract and stable Phase 3 error codes.
+### H5 product loop
 
-## Acceptance evidence on 2026-08-01 and 2026-08-02
+- Isolated anonymous demo plus invitation registration, email-code/password
+  login, reset, logout, and role-gated invitation administration.
+- Today, Records, Add, Cabinet, product detail/edit, and Me navigation on mobile
+  and desktop H5.
+- Manual product creation; three-image upload; durable recognition polling,
+  retry/manual fallback, saved OCR evidence, editable candidate, and explicit
+  human-confirmation boundary.
+- Product basic/status editing, schedule versioning, weekly/day/long-cycle
+  rules, reminder times, restock thresholds, expiry settings, and new batches.
+- Scheduled/ad-hoc/backfilled intake records, notes, FEFO inventory deduction,
+  exact repeat-safe undo, 30-day record list, projected finish/latest start,
+  and low-stock/expiry risk.
+- In-app reminder summary. H5 Web Push remains deferred.
+- Account deletion UI and API: exact-email confirmation immediately invalidates
+  all sessions; the worker deletes private objects first and then cascades
+  registered account data, retrying failed cleanup jobs.
 
-- `pnpm install --frozen-lockfile`: pass with four explicitly allowed build
-  dependencies.
-- `pnpm type-check`: pass.
-- `pnpm test`: 4/4 pass.
-- `pnpm build:h5`: pass.
-- `pnpm build:mp-weixin`: pass.
-- `go test ./...`: pass with writable isolated build cache.
-- `go vet ./...`: pass.
-- `go build ./cmd/api ./cmd/worker ./cmd/admin`: pass.
-- `docker-compose ... config`: pass.
-- All six runtime containers start; PostgreSQL, API, and Mailpit report healthy.
-- Direct liveness, direct readiness, and Caddy-proxied readiness return real
-  responses; readiness includes `database: ready`.
-- Worker logs a successful database heartbeat and explicitly reports jobs as
-  `not_implemented`.
-- SeaweedFS logs confirm the `suppq-uploads` bucket was created; anonymous S3
-  root access returns HTTP 403.
-- Mailpit reports v1.30.0 through its live API.
-- Browser check at 390x844 confirms API connected, zero horizontal overflow,
-  fixed bottom navigation, and no clipped cards. Desktop 1280px breakpoint has
-  fixed sidebar navigation and zero horizontal overflow.
-- Identity integration test creates its own PostgreSQL schema and passes demo
-  isolation, generic/email-bound invitations, concurrent one-use claim,
-  email-code plus password login, password reset, session invalidation, and
-  demo cleanup.
-- Live Mailpit delivery received six-digit codes; a real generic invitation was
-  claimed, use count advanced atomically, and the same user re-entered with a
-  password in a separate cookie session.
-- Live email-bound request returned 400 for the wrong email and 202 for the
-  bound email.
-- Real H5 browser at 390x844 completed demo → password login → registered empty
-  workspace → logout → new isolated demo. Admin login exposed the invitation
-  page with both created invitations and no horizontal overflow.
-- Phase 2 pure Go tests pass schedule intersection, rest-day finish projection,
-  independent anchors, historical day-cycle rules, fixed-point arithmetic,
-  FEFO, atomic insufficient-stock rejection, and exact restoration.
-- Phase 2 PostgreSQL integration test creates a fresh schema and passes scoped
-  product access, FEFO split allocation, idempotent retry, no partial mutation,
-  exact and repeat-safe undo, cross-tenant read/undo hiding, and Today projection.
-- `pnpm type-check`, 5/5 client tests, and `pnpm build:h5` pass for the real
-  Today/Cabinet/Add client.
-- Rebuilt Compose applied migration `202608020001`; live Caddy-proxied HTTP
-  created an isolated three-product demo, deducted D3 from 28 to 27, replayed
-  the same idempotency key without another deduction, and restored the exact
-  batch to 28 on undo.
-- Real H5 at 390×844 loaded 3 calculated Today items, changed 0/3 → 1/3 on
-  intake and back to 0/3 on undo, displayed the real Cabinet batches and risk,
-  opened the Add Product form, had no horizontal overflow, and logged no
-  browser console warnings or errors.
-- Phase 3 provider unit tests verify explicit Fake provenance, non-final Fake
-  status, response normalization, and refusal to accept an expiry date without
-  matching visible evidence.
-- Phase 3 temporary-schema integration test persists three images and jobs,
-  proves no unconfirmed product exists, hides sets/files/products across
-  tenants, runs all jobs, confirms idempotently, retains provider failures, and
-  requeues a failed job without deleting its image.
-- Rebuilt local stack applied migrations `202608020002` and `202608020003`.
-  Live proxied multipart HTTP persisted three 26,247-byte JPEG files, the
-  worker completed three jobs
-  as `partial` with provider `fake:development`, and an authorized file read
-  returned the original JPEG while a request without a session returned 401.
-- Live confirmation created product `78e367af-eee5-413a-942f-bf77e29f90c5` only
-  after an edited confirmation request; repeating confirmation returned the
-  same product, and the recognition set records that product ID.
-- Rebuilt H5 browser verification exposed separate three-image and manual-entry
-  paths, explicit private/Fake-provider copy, all three required image roles,
-  and no browser console warnings or errors.
-- Rebuilt local stack applied migration `202608020004`; the fresh-schema
-  recognition integration test proves Fake OCR evidence persistence, tenant
-  isolation, retained failures, retry, and confirmation against PostgreSQL.
-- Provider unit tests prove that structuring cannot run before the evidence
-  sink succeeds, persistence failure blocks structuring, and punctuation-only
-  OCR output is rejected.
-- A live, non-private synthetic-label run used Qwen/Qwen3-VL-30B-A3B-Instruct
-  for transcription and kimi-k2.5 for text-only structuring. All three OCR
-  texts were persisted first. It recovered `Serving Size: 1 Tablet`, `Servings
-  Per Container: 120`, `Vitamin C ... 500 mg`, and `EXP 2027-03-31`; the facts
-  and expiry candidates contained the corresponding structured values. OCR
-  stage time was 1.98–2.80 s and structure time was 1.95–6.11 s on this run.
-- The same synthetic fixtures proved the configured
-  `deepseek-ai/DeepSeek-OCR` endpoint returned punctuation-only output. It is
-  therefore rejected for the current development route and guarded before
-  Kimi invocation. This is measured provider failure, not an application-side
-  success or a claim about the model generally.
-- A focused live retry after tightening the front-label prompt kept `500 mg` in
-  the persisted OCR evidence while leaving `dose` and
-  `ingredientServingQuantity` empty, removing the observed strength/dose
-  contamination.
-- Rebuilt H5 browser verification expanded the saved OCR evidence inside the
-  confirmation card, showed provider model and timing, had viewport width equal
-  to document scroll width, and logged no application error. Two file-picker
-  warnings were produced by automation activation, not by the application path.
+### Data, recognition, and tenancy
 
-## In progress
+- PostgreSQL migrations through `202608210001`; six-decimal quantities,
+  transactionally consistent FEFO allocation, idempotency, and tenant scope on
+  private resources.
+- Day-cycle history remains non-retroactive when the current plan changes.
+- Private S3-compatible JPEG/PNG/WebP storage, opaque keys, authorized no-store
+  reads, expired-demo cleanup, deleted-account cleanup, and orphan-object
+  reconciliation with a grace period.
+- Durable PostgreSQL recognition jobs with leases, bounded retries, retained
+  failures, provider/model/timing provenance, and OCR-before-structuring
+  persistence.
+- Explicit `fake:development`, direct OpenAI-compatible vision, and
+  evidence-pipeline adapters. Production rejects Fake and incomplete selected
+  provider configuration.
+- Recognition-evaluation CLI and documented 30–50-image quality gate covering
+  field accuracy, correction, unrecognized/false-confidence/provider-failure
+  rates, and p95 latency.
 
-- Filling Phase 2 surface gaps: restock UI, schedule editing/version creation,
-  and a Records page.
-- Adding automated browser E2E and a repeatable restart-persistence check; the
-  current H5 acceptance is manual browser evidence.
-- Building and explicitly authorizing a private 30–50-image recognition
-  evaluation set. Synthetic live success proves connectivity and evidence
-  ordering, not real-label accuracy or production-provider acceptance.
-- Adding the uni-app non-H5 upload adapter and object-orphan reconciliation.
+### Operations and deployment
 
-## Not started
+- Production Compose for migration gate, API, worker, static H5, and Caddy edge;
+  backend-only network, read-only containers, dropped capabilities, automatic
+  TLS, CSP/HSTS/COOP, security headers, and external metrics denial.
+- Readiness checks PostgreSQL, private object bucket, worker heartbeat, and
+  recognition queue; `/metrics` exposes request, queue, and worker gauges for
+  an internal collector.
+- Per-IP API/auth rate limits with explicit trusted-proxy configuration.
+- Production configuration rejects insecure origin, database/object transport,
+  weak token pepper, non-TLS SMTP, untrusted proxy, Fake recognition, and
+  incomplete provider stages. `suppq-admin validate-config [--worker]` provides
+  a no-network preflight.
+- SMTP client uses STARTTLS with TLS 1.2 minimum in production and bounded
+  deadlines.
+- Encrypted `age` backup and guarded restore-drill scripts cover PostgreSQL plus
+  private objects, verify SHA-256 manifests, and refuse restore targets that do
+  not contain `drill`.
+- CI builds client/server/evaluation commands, runs unit and PostgreSQL
+  integration tests, starts the complete stack, bootstraps a local admin, and
+  runs Playwright with retained failure artifacts.
 
-- Records, restock, product-detail/edit, and account-deletion H5 interactions.
-- Application reminders.
-- Automated browser E2E suites (domain authorization has PostgreSQL integration coverage).
-- Production deployment, backup, restore, monitoring, and alerting.
-- Automatic delivery of email-bound invitation links through the selected
-  production email provider.
-- Reverse-proxy/IP abuse limits and automated browser E2E for identity paths.
-- Demo sample intake history; Phase 2 currently seeds products and batches, not
-  historical intake records.
+## Acceptance evidence on 2026-08-21
 
-## Deferred after V1
+- `make check`: pass.
+- `make test`: pass.
+- `make build`: pass for H5 and API/worker/admin/migrate/eval commands.
+- PostgreSQL integration suites: pass for identity, catalog, and recognition,
+  including tenant isolation, account cleanup, file cleanup, orphan
+  reconciliation, schedule history, FEFO, retry, and confirmation.
+- Rebuilt seven-service local Compose: migration applied; API, worker,
+  PostgreSQL, object storage, Mailpit, and H5 started successfully.
+- `/api/v1/health/ready`: `database`, `storage`, and `worker` all `ready`;
+  local provider remains visibly `fake:development`.
+- `/metrics`: request counters, recognition queue gauges, and live worker
+  heartbeat returned from the API and remain blocked by the public production
+  Caddy route definition.
+- `make test-restart-persistence`: pass after real PostgreSQL/API/worker
+  restarts; the same session and quantity remained, then the test intake was
+  undone and the exact original quantity restored.
+- Playwright: isolated demos/main tabs, manual create→restock→backfill→undo,
+  three-image Fake candidate→human confirmation, invitation registration→H5
+  account deletion, and mobile/desktop overflow coverage pass against the live
+  local stack. Browser console errors are rejected.
+- Production Compose configuration, shell syntax for backup/restore/restart
+  scripts, and current Caddy configuration validate locally.
 
-- H5 Web Push.
-- WeChat login and mini-program subscription messages.
-- Data export.
-- Complete AI conversation and note organization.
-- Advanced cost analytics.
-- Public registration.
-- Payments and plans.
+The Playwright suite uses generated one-pixel images only. No private user
+image was sent to a provider in this work.
 
-## Known debt and environment notes
+## Remaining production gates
 
-- The current official uni-app template constrains `vue-i18n` to unsupported
-  v9. It remains pinned for template compatibility and must be evaluated before
-  product localization work.
-- The uni-app/Vite pipeline calls Dart Sass's deprecated legacy JS API. Builds
-  pass, but this must be resolved before Dart Sass 2 adoption.
-- The CI file lives under `uni/.github/` and activates only when `uni/` becomes
-  its own repository root, preserving the frozen parent boundary.
-- The first Colima 0.10.3 VM on this machine produced a broken
-  `/etc/resolv.conf` symlink. The VM's own resolver backup restored Docker Hub
-  access. This was a local environment defect, not an application defect.
-- `net/smtp` negotiates STARTTLS when the server offers it, but production SMTP
-  provider credentials and delivery behavior are not configured or accepted.
-- Database and expired-demo object cleanup are implemented in worker order.
-  Account deletion is still absent, and an orphan-object reconciler is still
-  needed for object writes that succeed before a database transaction fails.
+These are not code-completion claims:
+
+1. Select domain/DNS, server/region, TLS-ready network, production PostgreSQL,
+   private COS/OSS, SMTP provider, monitoring destination, and off-host backup
+   destination.
+2. Record the selected visual/LLM provider's retention terms and obtain explicit
+   authorization for a 30–50-image private evaluation set.
+3. Run `make recognition-eval INPUT=...`; do not promote a provider unless every
+   threshold passes.
+4. Deploy with real secret files, run `suppq-admin validate-config` for API and
+   `--worker` for worker, apply migrations, and verify readiness/metrics without
+   exposing `/metrics` publicly.
+5. Run an encrypted backup and a separate empty-target restore drill. Retain the
+   manifest, table/object counts, and timestamp.
+6. Pass the full browser main path against production-like email, storage, and
+   live recognition; verify account image deletion and alert delivery.
+7. Complete privacy/terms copy naming the actual third-party processors and
+   finish working-name/domain/trademark clearance before public marketing.
+
+Until those seven gates have evidence, the accurate state is **deployable
+release candidate**, not **online production**.
+
+## Deferred after launch beta
+
+- Product-level AI explanation (D-021).
+- Health-context profile fields until used by a shipped function (D-022).
+- H5 Web Push, WeChat login/upload/subscription messages, and mini-program UI.
+- Data export, AI note/conversation organization, advanced analytics, public
+  registration, payments, and quotas beyond safety limits.
+
+## Known debt
+
+- The official uni-app template still pins `vue-i18n` v9 for compatibility.
+- The uni-app/Vite pipeline emits Dart Sass legacy API deprecation warnings.
+- Automatic email-bound invitation delivery is not implemented; the admin UI
+  returns a one-time secret for deliberate sharing. Login/reset codes do use
+  SMTP.
+- Production backup tooling depends on `pg_dump`/`pg_restore`, MinIO `mc`, and
+  `age`; those tools and real destinations are external operational resources.
+- `uni/.github/workflows/ci.yml` activates only when `uni/` is an independent
+  repository root, preserving the frozen parent-project boundary.

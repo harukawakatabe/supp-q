@@ -1,112 +1,104 @@
-# V1 Acceptance
+# H5 Launch-Beta Acceptance
 
 ## Main path
 
 ```text
-anonymous demo
+anonymous isolated demo
 → inspect seeded Today and Cabinet
-→ register through a valid invitation
-→ verify email
-→ enter an empty real workspace
-→ upload three images
-→ wait for recognition
-→ edit and confirm
-→ save product, schedule, and batch
-→ record intake
+→ register through a valid invitation and SMTP code
+→ enter an empty registered workspace
+→ create manually or upload front/facts/expiry images
+→ wait, retry or fall back manually
+→ edit and explicitly confirm recognition candidates
+→ save product, schedule, and opening batch
+→ edit the product and create a new schedule version
+→ restock
+→ record or backfill an intake
 → verify FEFO allocation
-→ undo
-→ verify exact batch restoration
-→ sign out and sign in on another browser
-→ verify persistent state
-→ delete account
-→ verify data and objects are removed
+→ undo and restore the exact batches
+→ sign out/sign in and survive service restart
+→ delete the account and its private objects
 ```
 
-## Required automated coverage
+## Automated evidence
 
-- invitation lifecycle and concurrent claim
-- password and email-code login
-- session rotation and logout
-- anonymous demo isolation
-- 24-hour inactivity cleanup
-- cross-user authorization
-- schedule intersection
-- FEFO and exact undo
-- recognition retry and manual fallback
-- unconfirmed OCR never becomes final data
-- provider timeout
-- restart persistence
-- mobile and desktop H5 browser paths
+### Go unit and PostgreSQL integration
 
-## Current Phase 1–3 evidence
+- Invitation expiry/revocation/use limits and concurrent one-use claim.
+- Email-code/password identity binding, reset, logout, session invalidation,
+  demo cleanup, exact-email deletion confirmation, durable cleanup claim, and
+  final registered-user deletion.
+- Demo and registered tenant isolation across products, files, jobs, and
+  intakes.
+- Weekly/day/long-cycle intersection, independent anchors, non-retroactive
+  day-cycle history, fixed-point arithmetic, projected finish/latest start.
+- Transactional FEFO split allocation, insufficient-stock rollback,
+  idempotency, exact repeat-safe undo, product editing, restock, and record list.
+- Private three-role file/job persistence, retry/manual fallback, Fake
+  provenance, OCR-before-structure ordering, tenant hiding, idempotent
+  confirmation, account object cleanup, and orphan reconciliation.
+- Evaluation thresholds reject false-confidence and other failed gates.
+- Production configuration rejects insecure origin/transport/SMTP/proxy,
+  weak secrets, Fake recognition, and incomplete provider stages.
 
-Implemented automated coverage:
+### Playwright against the real local stack
 
-- two independent demo users and workspaces
-- generic and email-bound invitation validation
-- concurrent claim against a one-use invitation
-- email-code and password identities resolving to the same user
-- password reset and all-session invalidation
-- login-origin demo cleanup
-- schedule intersection, independent anchors, historical day-cycle rules,
-  projected finish, latest start, and fixed-point quantity arithmetic
-- FEFO split allocation, atomic insufficient-stock rejection, idempotent intake,
-  exact repeat-safe undo, Today projection, and cross-tenant resource hiding
-- three-role private upload persistence and tenant-scoped set/file reads
-- persisted recognition job claiming, explicit Fake provenance, retained
-  provider failures, manual fallback, retry, and idempotent confirmation
-- proof that recognition candidates create no product before human confirmation
-- proof that OCR/VL transcription is committed before Kimi structuring and a
-  failed evidence write prevents the structuring request
-- rejection of empty or punctuation-only transcription before downstream cost
+- Two anonymous browser contexts receive different users, workspaces, and
+  seeded product IDs.
+- Today, Records, Add, Cabinet, and Me render and navigate on mobile and desktop.
+- Manual create → product detail → restock → backfill with note → exact undo.
+- Three generated non-private images → durable Fake candidates → edit → human
+  confirmation. No product is accepted silently.
+- Admin SMTP code → one-use invitation → new registered account → H5 permanent
+  deletion submission → new isolated demo.
+- Mobile and desktop main pages have no horizontal overflow.
+- Browser console/page errors fail the suite; traces, screenshots, videos, and
+  Compose logs are retained on CI failure.
 
-Manually exercised against the real local stack:
+### Operational acceptance
 
-- SMTP delivery into Mailpit
-- generic invitation creation and claim
-- email-bound wrong-email rejection
-- mobile H5 demo, password login, registered workspace, logout, and new demo
-- role-gated invitation administration page
-- proxied multipart upload to private local object storage, three worker job
-  completions, authorized byte-for-byte file delivery, unauthenticated 401, and
-repeat-safe confirmation returning one product
-- non-private synthetic Qwen VL → persisted transcription → Kimi processing
-  for front, facts, and expiry, with provider/model/timing traces visible
+- A real restart of PostgreSQL, API, and worker preserves the same session and
+  deducted quantity; the script then undoes the acceptance intake and restores
+  the original quantity.
+- Readiness requires database, object bucket, worker heartbeat, and queue
+  access. Metrics report requests, failures, queue state, and heartbeat age.
+- Production Compose and Caddy configuration parse; shell scripts pass syntax
+  checks; containers rebuild from locked dependencies.
 
-This is not the complete V1 acceptance gate. Expired-demo object cleanup is
-wired but account deletion, automated browser E2E, restart persistence, backup
-restore, and production-like provider behavior remain unaccepted. The Fake
-provider validates orchestration and safety boundaries only. The synthetic
-live run validates connectivity and evidence ordering only; it is not private
-real-label accuracy evidence.
+## Recognition quality gate
 
-## Recognition evaluation
+The application/provider boundary is not accepted from Fake or synthetic-label
+connectivity. Use 30–50 explicitly authorized private images covering Chinese
+and English fronts, facts panels, expiry dates, glare, blur, crop, and low
+contrast. `make recognition-eval INPUT=/absolute/path/to/results.json` must
+pass every default threshold:
 
-Create a 30–50-image private set covering:
+- field accuracy ≥ 0.90
+- correction rate ≤ 0.25
+- unrecognized rate ≤ 0.15
+- false-confidence rate ≤ 0.05
+- provider-failure rate ≤ 0.05
+- p95 latency ≤ 45 seconds
 
-- Chinese and English labels
-- product front
-- Supplement Facts
-- expiry dates
-- glare, blur, crop, and low contrast
-
-Report:
-
-- field accuracy
-- user correction rate
-- unrecognized rate
-- false confident values
-- latency
-- provider failure rate
-- OCR-to-structure disagreement and direct-VL disagreement on a bounded dual subset
+The evaluator produces a machine-readable report. A small fixture requires the
+explicit `-allow-small` diagnostic flag and cannot close the production gate.
 
 ## Production gate
 
-- HTTPS works.
-- Database migrations are explicit.
-- API, worker, DB, and storage health are visible.
-- Backups run.
-- A backup has been restored.
-- Secrets are absent from the client, logs, and Git.
-- No fake provider is enabled.
-- The complete main path passes against production-like services.
+All items require retained evidence:
+
+- DNS and automatic HTTPS work for the selected hostname.
+- API and worker preflight reject invalid production configuration.
+- Migrations complete before API/worker start.
+- PostgreSQL, object bucket, worker heartbeat, queue, and provider failure are
+  observable; internal metrics are not public.
+- Real SMTP delivery and abuse/rate-limit behavior pass.
+- A selected live provider passes the private recognition gate.
+- An encrypted off-host backup runs and restores into separate empty drill
+  database/bucket targets with a valid checksum manifest.
+- The full browser path passes against production-like dependencies.
+- Account deletion removes real test-account database rows and private objects.
+- Privacy/terms identify actual processors and retention behavior.
+
+Current result: local code acceptance passes; external production acceptance is
+open. A healthy endpoint or a provider-shaped response alone never closes it.

@@ -6,14 +6,20 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"mime"
+	"net"
 	"net/http"
+	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"suppq.local/server/internal/catalog"
+	"suppq.local/server/internal/database"
 	"suppq.local/server/internal/identity"
 	"suppq.local/server/internal/recognition"
 )
@@ -22,9 +28,21 @@ type DatabaseChecker interface {
 	Ping(context.Context) error
 }
 
+type OperationsChecker interface {
+	WorkerState(context.Context) (database.WorkerState, error)
+	RecognitionQueue(context.Context) (int, int, int, error)
+}
+
+type StorageChecker interface {
+	Ping(context.Context) error
+}
+
 type Dependencies struct {
 	AllowedOrigin string
 	Database      DatabaseChecker
+	Operations    OperationsChecker
+	Storage       StorageChecker
+	WorkerMaxAge  time.Duration
 	Logger        *slog.Logger
 	Version       string
 	Identity      *identity.Service
@@ -32,6 +50,7 @@ type Dependencies struct {
 	Recognition   *recognition.Service
 	SessionCookie string
 	CookieSecure  bool
+	TrustProxy    bool
 }
 
 type healthResponse struct {
@@ -41,6 +60,11 @@ type healthResponse struct {
 	RequestID string `json:"requestId"`
 	Timestamp string `json:"timestamp"`
 	Database  string `json:"database,omitempty"`
+	Storage   string `json:"storage,omitempty"`
+	Worker    string `json:"worker,omitempty"`
+	Provider  string `json:"provider,omitempty"`
+	Queue     int    `json:"recognitionQueue,omitempty"`
+	Failed    int    `json:"recognitionFailed,omitempty"`
 }
 
 type errorResponse struct {
@@ -60,6 +84,8 @@ func New(deps Dependencies) http.Handler {
 		deps.Logger = slog.Default()
 	}
 	mux := http.NewServeMux()
+	stats := &requestMetrics{}
+	limiter := newIPRateLimiter()
 	mux.HandleFunc("GET /api/v1/health/live", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, healthResponse{
 			Status: "ok", Service: "suppq-api", Version: deps.Version,
@@ -67,6 +93,7 @@ func New(deps Dependencies) http.Handler {
 		})
 	})
 	mux.HandleFunc("GET /api/v1/health/ready", func(w http.ResponseWriter, r *http.Request) {
+		response := healthResponse{Status: "ok", Service: "suppq-api", Version: deps.Version, RequestID: requestID(r.Context()), Timestamp: time.Now().UTC().Format(time.RFC3339), Database: "ready"}
 		if err := deps.Database.Ping(r.Context()); err != nil {
 			deps.Logger.Warn("readiness check failed", "request_id", requestID(r.Context()), "dependency", "postgres", "error", err)
 			writeJSON(w, http.StatusServiceUnavailable, healthResponse{
@@ -75,10 +102,40 @@ func New(deps Dependencies) http.Handler {
 			})
 			return
 		}
-		writeJSON(w, http.StatusOK, healthResponse{
-			Status: "ok", Service: "suppq-api", Version: deps.Version,
-			RequestID: requestID(r.Context()), Timestamp: time.Now().UTC().Format(time.RFC3339), Database: "ready",
-		})
+		if deps.Storage != nil {
+			if err := deps.Storage.Ping(r.Context()); err != nil {
+				deps.Logger.Warn("readiness check failed", "request_id", requestID(r.Context()), "dependency", "object_storage", "error", err)
+				response.Status, response.Storage = "degraded", "unavailable"
+				writeJSON(w, http.StatusServiceUnavailable, response)
+				return
+			}
+			response.Storage = "ready"
+		}
+		if deps.Operations != nil {
+			state, err := deps.Operations.WorkerState(r.Context())
+			maxAge := deps.WorkerMaxAge
+			if maxAge <= 0 {
+				maxAge = 2 * time.Minute
+			}
+			if err != nil || time.Since(state.LastSeenAt) > maxAge {
+				deps.Logger.Warn("readiness check failed", "request_id", requestID(r.Context()), "dependency", "worker", "error", err)
+				response.Status, response.Worker = "degraded", "stale"
+				writeJSON(w, http.StatusServiceUnavailable, response)
+				return
+			}
+			response.Worker, response.Provider = "ready", state.Provider
+			queued, running, failed, queueErr := deps.Operations.RecognitionQueue(r.Context())
+			if queueErr != nil {
+				response.Status, response.Worker = "degraded", "queue_unavailable"
+				writeJSON(w, http.StatusServiceUnavailable, response)
+				return
+			}
+			response.Queue, response.Failed = queued+running, failed
+		}
+		writeJSON(w, http.StatusOK, response)
+	})
+	mux.HandleFunc("GET /metrics", func(w http.ResponseWriter, r *http.Request) {
+		writeMetrics(w, r, deps, stats)
 	})
 	if deps.Identity != nil {
 		registerIdentityRoutes(mux, deps)
@@ -97,7 +154,144 @@ func New(deps Dependencies) http.Handler {
 		writeJSON(w, http.StatusNotFound, response)
 	})
 
-	return requestIDMiddleware(loggingMiddleware(deps.Logger, corsMiddleware(deps.AllowedOrigin, mux)))
+	return requestIDMiddleware(securityHeadersMiddleware(rateLimitMiddleware(limiter, deps.TrustProxy, metricsMiddleware(stats, loggingMiddleware(deps.Logger, corsMiddleware(deps.AllowedOrigin, mux))))))
+}
+
+type rateBucket struct {
+	window time.Time
+	all    int
+	auth   int
+}
+
+type ipRateLimiter struct {
+	mu      sync.Mutex
+	buckets map[string]rateBucket
+}
+
+func newIPRateLimiter() *ipRateLimiter { return &ipRateLimiter{buckets: map[string]rateBucket{}} }
+
+func (limiter *ipRateLimiter) allow(ip string, auth bool, now time.Time) bool {
+	limiter.mu.Lock()
+	defer limiter.mu.Unlock()
+	bucket := limiter.buckets[ip]
+	if bucket.window.IsZero() || now.Sub(bucket.window) >= time.Minute {
+		bucket = rateBucket{window: now}
+	}
+	bucket.all++
+	if auth {
+		bucket.auth++
+	}
+	limiter.buckets[ip] = bucket
+	if len(limiter.buckets) > 10000 {
+		for key, value := range limiter.buckets {
+			if now.Sub(value.window) > 10*time.Minute {
+				delete(limiter.buckets, key)
+			}
+		}
+	}
+	return bucket.all <= 300 && (!auth || bucket.auth <= 30)
+}
+
+func clientIP(r *http.Request, trustProxy bool) string {
+	if trustProxy {
+		if forwarded := strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-For"), ",")[0]); forwarded != "" {
+			return forwarded
+		}
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err == nil {
+		return host
+	}
+	return r.RemoteAddr
+}
+
+func rateLimitMiddleware(limiter *ipRateLimiter, trustProxy bool, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/metrics" || strings.HasPrefix(r.URL.Path, "/api/v1/health/") {
+			next.ServeHTTP(w, r)
+			return
+		}
+		auth := strings.HasPrefix(r.URL.Path, "/api/v1/auth/")
+		if !limiter.allow(clientIP(r, trustProxy), auth, time.Now().UTC()) {
+			w.Header().Set("Retry-After", "60")
+			response := errorResponse{}
+			response.Error.Code = "rate_limited"
+			response.Error.Message = "请求过于频繁，请稍后再试。"
+			response.Error.RequestID = requestID(r.Context())
+			writeJSON(w, http.StatusTooManyRequests, response)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+type requestMetrics struct {
+	requests   atomic.Int64
+	inFlight   atomic.Int64
+	errors     atomic.Int64
+	durationMS atomic.Int64
+}
+
+type statusWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (writer *statusWriter) WriteHeader(status int) {
+	writer.status = status
+	writer.ResponseWriter.WriteHeader(status)
+}
+
+func (writer *statusWriter) Write(data []byte) (int, error) {
+	if writer.status == 0 {
+		writer.WriteHeader(http.StatusOK)
+	}
+	return writer.ResponseWriter.Write(data)
+}
+
+func metricsMiddleware(stats *requestMetrics, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		started := time.Now()
+		stats.requests.Add(1)
+		stats.inFlight.Add(1)
+		defer stats.inFlight.Add(-1)
+		writer := &statusWriter{ResponseWriter: w}
+		next.ServeHTTP(writer, r)
+		stats.durationMS.Add(time.Since(started).Milliseconds())
+		if writer.status >= 500 {
+			stats.errors.Add(1)
+		}
+	})
+}
+
+func securityHeadersMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		w.Header().Set("Permissions-Policy", "camera=(self), microphone=(), geolocation=()")
+		next.ServeHTTP(w, r)
+	})
+}
+
+func writeMetrics(w http.ResponseWriter, r *http.Request, deps Dependencies, stats *requestMetrics) {
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	lines := []string{
+		"# TYPE suppq_http_requests_total counter", "suppq_http_requests_total " + strconv.FormatInt(stats.requests.Load(), 10),
+		"# TYPE suppq_http_errors_total counter", "suppq_http_errors_total " + strconv.FormatInt(stats.errors.Load(), 10),
+		"# TYPE suppq_http_in_flight gauge", "suppq_http_in_flight " + strconv.FormatInt(stats.inFlight.Load(), 10),
+		"# TYPE suppq_http_request_duration_milliseconds_sum counter", "suppq_http_request_duration_milliseconds_sum " + strconv.FormatInt(stats.durationMS.Load(), 10),
+	}
+	if deps.Operations != nil {
+		if queued, running, failed, err := deps.Operations.RecognitionQueue(r.Context()); err == nil {
+			lines = append(lines, "# TYPE suppq_recognition_jobs gauge", fmt.Sprintf("suppq_recognition_jobs{status=\"queued\"} %d", queued), fmt.Sprintf("suppq_recognition_jobs{status=\"running\"} %d", running), fmt.Sprintf("suppq_recognition_jobs{status=\"failed\"} %d", failed))
+		}
+		if state, err := deps.Operations.WorkerState(r.Context()); err == nil {
+			lines = append(lines, "# TYPE suppq_worker_heartbeat_age_seconds gauge", fmt.Sprintf("suppq_worker_heartbeat_age_seconds %.0f", time.Since(state.LastSeenAt).Seconds()))
+		}
+	}
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(strings.Join(lines, "\n") + "\n"))
 }
 
 func registerCatalogRoutes(mux *http.ServeMux, deps Dependencies) {
@@ -136,6 +330,23 @@ func registerCatalogRoutes(mux *http.ServeMux, deps Dependencies) {
 			return
 		}
 		item, err := deps.Catalog.GetProduct(r.Context(), catalog.Scope{UserID: actor.UserID, WorkspaceID: actor.WorkspaceID}, r.PathValue("id"))
+		if err != nil {
+			writeApplicationError(w, r, deps.Logger, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, item)
+	})
+	mux.HandleFunc("PUT /api/v1/products/{id}", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := catalogActor(w, r, deps)
+		if !ok {
+			return
+		}
+		var body catalog.UpdateProductInput
+		if err := readJSON(r, &body); err != nil {
+			writeApplicationError(w, r, deps.Logger, err)
+			return
+		}
+		item, err := deps.Catalog.UpdateProduct(r.Context(), catalog.Scope{UserID: actor.UserID, WorkspaceID: actor.WorkspaceID}, r.PathValue("id"), body)
 		if err != nil {
 			writeApplicationError(w, r, deps.Logger, err)
 			return
@@ -198,6 +409,18 @@ func registerCatalogRoutes(mux *http.ServeMux, deps Dependencies) {
 			return
 		}
 		writeJSON(w, http.StatusCreated, map[string]any{"intake": intake, "product": product})
+	})
+	mux.HandleFunc("GET /api/v1/intakes", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := catalogActor(w, r, deps)
+		if !ok {
+			return
+		}
+		items, err := deps.Catalog.ListIntakes(r.Context(), catalog.Scope{UserID: actor.UserID, WorkspaceID: actor.WorkspaceID}, strings.TrimSpace(r.URL.Query().Get("from")), strings.TrimSpace(r.URL.Query().Get("to")))
+		if err != nil {
+			writeApplicationError(w, r, deps.Logger, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"items": items})
 	})
 	mux.HandleFunc("DELETE /api/v1/intakes/{id}", func(w http.ResponseWriter, r *http.Request) {
 		actor, ok := catalogActor(w, r, deps)
@@ -421,6 +644,26 @@ func registerIdentityRoutes(mux *http.ServeMux, deps Dependencies) {
 		clearSessionCookie(w, deps)
 		w.WriteHeader(http.StatusNoContent)
 	})
+	mux.HandleFunc("DELETE /api/v1/account", func(w http.ResponseWriter, r *http.Request) {
+		actor, err := deps.Identity.ActorForToken(r.Context(), sessionToken(r, deps.SessionCookie), true)
+		if err != nil {
+			writeApplicationError(w, r, deps.Logger, err)
+			return
+		}
+		var body struct {
+			Confirmation string `json:"confirmation"`
+		}
+		if err = readJSON(r, &body); err != nil {
+			writeApplicationError(w, r, deps.Logger, err)
+			return
+		}
+		if err = deps.Identity.RequestAccountDeletion(r.Context(), actor, body.Confirmation); err != nil {
+			writeApplicationError(w, r, deps.Logger, err)
+			return
+		}
+		clearSessionCookie(w, deps)
+		writeJSON(w, http.StatusAccepted, map[string]string{"status": "deletion_queued"})
+	})
 	mux.HandleFunc("GET /api/v1/admin/invitations", func(w http.ResponseWriter, r *http.Request) {
 		actor, err := deps.Identity.ActorForToken(r.Context(), sessionToken(r, deps.SessionCookie), true)
 		if err != nil {
@@ -523,7 +766,7 @@ func writeApplicationError(w http.ResponseWriter, r *http.Request, logger *slog.
 			status = http.StatusForbidden
 		case "rate_limited":
 			status = http.StatusTooManyRequests
-		case "invitation_required", "invitation_invalid", "invalid_credentials", "invalid_email", "invalid_password", "invalid_json", "invalid_content_type", "invalid_invitation_kind", "invalid_expiration", "invalid_max_uses":
+		case "invitation_required", "invitation_invalid", "invalid_credentials", "invalid_email", "invalid_password", "invalid_json", "invalid_content_type", "invalid_invitation_kind", "invalid_expiration", "invalid_max_uses", "invalid_confirmation":
 			status = http.StatusBadRequest
 		case "invitation_not_found":
 			status = http.StatusNotFound
@@ -537,7 +780,7 @@ func writeApplicationError(w http.ResponseWriter, r *http.Request, logger *slog.
 		switch code {
 		case "resource_not_found":
 			status = http.StatusNotFound
-		case "insufficient_inventory", "intake_already_undone":
+		case "insufficient_inventory":
 			status = http.StatusConflict
 		case "invalid_product", "invalid_schedule", "invalid_batch", "invalid_ingredient", "invalid_intake", "invalid_date":
 			status = http.StatusBadRequest

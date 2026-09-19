@@ -32,6 +32,7 @@
 | D-026 | Superseded by D-028: keep the former parent Git root only until explicit repository extraction. | This preserved the frozen legacy boundary while the owner had not yet authorized the repository operation. |
 | D-027 | R1 schema migration uses expand/backfill/compatibility/validate/later-contract stages. The first migration adds only the platform spine and quarantine evidence. | Existing Launch-Beta reads/writes must stay functional while immutable versions and projections are reconciled; no destructive cutover is justified yet. |
 | D-028 | Extract the complete `uni/` path history into the private standalone `harukawakatabe/supp-q` repository; keep the former parent snapshot frozen for rollback. | Makes the portable root workflow active, removes ambiguity about the implementation boundary, and preserves relevant history without importing frozen projects. |
+| D-029 | Gate local API/worker startup on SeaweedFS reporting non-zero free volume capacity. | S3 bucket existence can succeed before the local volume server is writable, causing uploaded images to remain stuck before recognition. |
 
 ## Pending external choices
 

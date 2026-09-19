@@ -81,8 +81,8 @@ a future real production-like snapshot rehearsal.
 ## Open evidence
 
 - Actual human owner names and escalation route (`OPEN_OD_01`).
-- Active hosted CI and branch protection; `uni/.github` is inactive while the
-  parent repository remains the Git root.
+- Branch protection and required-check enforcement; hosted CI is active in the
+  standalone repository.
 - Real/current production-like snapshot inventory and migration rehearsal.
 - Contention and lock-time measurement at representative scale.
 - E2–E6 Product/profile, plan, capture, intake/inventory, risk/reminder expand and

@@ -110,6 +110,9 @@ then passed client, server, and integration E2E at commit `55587f9`.
 - `fake:development` validates orchestration, never accuracy.
 - Readiness is stronger than liveness; it includes database, storage, worker,
   and queue checks.
+- In local Compose, `object-storage` must be healthy with non-zero SeaweedFS
+  free volume capacity before API or worker starts. Bucket existence alone does
+  not prove uploads are writable.
 - Product edits must preserve day-cycle history. The service reconstructs that
   history in `ScheduleView`; removing it changes past Today calculations.
 - `.github/workflows/ci.yml` is active in the standalone repository. Keep pnpm

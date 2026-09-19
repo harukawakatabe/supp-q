@@ -32,7 +32,7 @@ Confidence:
 
 - R1 workstreams and dependencies: `IMPLEMENTATION_PLAN_R1.md`.
 - Execution/owners: `EXECUTION_REGISTRY_R1.md`; actual human owner names and
-  hosted CI activation remain open.
+  branch-protection enforcement remain open.
 - Physical schema: `SCHEMA_R1.md`; the first platform-spine migration is locally
   verified, while the remaining R1 expand/backfill groups are open.
 - Release evidence: `R1_GATE_CHECKLIST.md`; RG0–RG4 are partial where noted and
@@ -99,8 +99,9 @@ or accepted recognition provider has been supplied.
   backend-only network, read-only containers, dropped capabilities, automatic
   TLS, CSP/HSTS/COOP, security headers, and external metrics denial.
 - Readiness checks PostgreSQL, private object bucket, worker heartbeat, and
-  recognition queue; `/metrics` exposes request, queue, and worker gauges for
-  an internal collector.
+  recognition queue. Local Compose additionally waits for SeaweedFS to report
+  non-zero writable volume capacity before starting API and worker; `/metrics`
+  exposes request, queue, and worker gauges for an internal collector.
 - Per-IP API/auth rate limits with explicit trusted-proxy configuration.
 - Production configuration rejects insecure origin, database/object transport,
   weak token pepper, non-TLS SMTP, untrusted proxy, Fake recognition, and

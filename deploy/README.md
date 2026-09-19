@@ -13,7 +13,7 @@ gate:
 - Mailpit UI: <http://127.0.0.1:8025>
 - Goose migration container: exits successfully before API and worker start
 
-From `uni/`:
+From the repository root:
 
 ```bash
 make dev
@@ -21,6 +21,10 @@ make dev
 
 The Makefile prefers `docker compose` and falls back to the Homebrew
 `docker-compose` binary. Direct equivalents remain valid when needed.
+
+The SeaweedFS container is healthy only after its master reports non-zero free
+volume capacity. API and worker startup waits for that condition so an existing
+S3 bucket cannot mask an unwritable local volume server.
 
 The local credentials committed in the development Compose file are disposable
 and must never be reused outside local development.

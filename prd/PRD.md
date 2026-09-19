@@ -3706,3 +3706,406 @@ MVP/Web 继续作为交互和测试案例来源，不能把其 localStorage 状�
 8. CSV 使用固定 v1 schema，在同一文件中提供 total、source 和 incomplete_source 行；范围、时区、换算和页面保持同一 revision。
 
 请确认模块 12。确认后，模块 13 将定义站内提醒、全局默认与单品覆盖、时区、提醒生成/去重、低库存与临期触达，以及 H5 通知权限边界。
+
+## 13. 站内提醒与通知权限
+
+### 13.1 模块目标与边界
+
+提醒模块负责在用户进入小补Q时，把已经由计划、记录、库存和有效期领域确定的待处理事实，转化为克制、可去重、可追溯的站内行动提示。它不重新判断哪天该服用、不重新计算库存或有效期，也不因用户是否看到提醒而改变任何业务事实。
+
+本模块冻结以下首期边界：
+
+1. H5 首期只提供站内提醒：提醒中心、未读角标、今日摘要和风险入口。
+2. 首期不实现 Web Push、短信、邮件、微信订阅消息或小程序系统通知；界面不展示不可用的假开关。
+3. 站内提醒不需要浏览器/操作系统通知权限。“站内提醒已开启”绝不能写成“系统通知已授权”或“关闭页面后也会收到”。
+4. 模块 8 的 `doseSlots[].localTime` 是计划执行时点，不是通知授权；计划存在与提醒是否开启相互独立。
+5. 关闭提醒只停止提醒事件触达，不删除计划任务、服用记录、库存风险或补剂柜中的确定性提示。
+6. 提醒用于个人记录和行动回看，不宣称医学依从性监护，不向用户保证某条消息一定在后台、锁屏或特定设备送达。
+
+### 13.2 用户故事
+
+| 角色 | 场景 | 需求 | 产品结果 |
+| --- | --- | --- | --- |
+| 多补剂长期用户 | 打开 H5 想快速知道接下来要处理什么 | 看到下一个时点、尚未记录的计划和高优先级库存风险 | 不用逐个翻产品 |
+| 低打扰用户 | 不希望每个产品单独提示 | 按时段合并计划摘要，只保留必要的漏记和风险提醒 | 减少噪音但不隐藏任务 |
+| 精确时间用户 | 希望每个时点分别出现提示 | 使用逐时点模式 | 与 doseSlot 一一对应 |
+| 临时暂停某产品用户 | 仍保留产品和计划，但暂时不想收到它的提示 | 单品静默，不影响其他产品 | 不需要删计划或伪造暂停 |
+| 库存管理用户 | 产品快用完或批次即将过期 | 看到可解释的日期、数量和行动入口 | 提醒直接连接补货或批次详情 |
+| 跨设备用户 | 在不同设备打开 H5 | 已读、处理、关闭和单品静默保持一致 | 不由各浏览器维护独立提醒状态 |
+
+### 13.3 提醒类型与事实来源
+
+| 类别 | 事件类型 | 唯一事实来源 | 触发概述 | 自动解决条件 |
+| --- | --- | --- | --- | --- |
+| 计划执行 | `plan_due` | `ScheduledOccurrence` + active intake | 到达启用的摘要/时点时间且仍有待记录 occurrence | 目标 occurrence 完成、撤销计划版本或当日结束 |
+| 漏记兜底 | `plan_overdue` | occurrence 实际 localTime + active intake | 实际时点超过宽限期且仍未完整记录 | occurrence 完成或当日结束 |
+| 低库存 | `stock_low` | 模块 10 库存覆盖投影 | 首次进入 low 风险 episode | 补货/调整后退出 low/depleted |
+| 无库存/首次不足 | `stock_depleted` / `stock_shortfall` | 批次余额与 `firstShortfallOccurrenceAt` | 风险新出现或从 low 升级 | 库存恢复且短缺解除 |
+| 临期 | `expiry_near` | BatchRiskProjection | 批次首次进入 near_expiry | 批次耗尽、作废、日期修正或风险解除 |
+| 无法按期用完 | `expiry_unfinishable` | FEFO + 未来 occurrence 模拟 | 首次进入 unfinishable | 计划/库存变化后解除 |
+| 已过期 | `expiry_expired` | 有效期结束边界 + 批次余额 | 首次进入 expired | 批次余额清零、作废或日期纠正 |
+
+unknown 有效期、计算失败和没有未来计划属于风险状态说明，不自动生成“安全”或“危险”提醒。页面可在对应产品上提示资料不足，但不能用提醒系统替代模块 10 的事实状态。
+
+### 13.4 核心对象
+
+| 对象 | 关键字段 | 规则 |
+| --- | --- | --- |
+| `ReminderPreference` | workspaceId、enabled、groupingMode、planDueEnabled、overdueEnabled、overdueGraceMinutes、inventoryEnabled、expiryEnabled、version | 工作区级；关闭不改计划和风险事实 |
+| `ReminderWindowPreference` | window、enabled、summaryTime | 四时段摘要配置；summaryTime 必须落在本时段 |
+| `ProductReminderOverride` | productId、planMode、inventoryMode、expiryMode、version | 每类 `inherit / muted`；不能越过全局关闭强制开启 |
+| `ReminderEvent` | type、sourceIds、dedupeKey、scheduledAt、availableAt、timeZone、status、readAt、resolvedAt、dismissedAt、sourceRevision | 服务端权威站内事件；内容可从快照和当前事实解释 |
+| `ReminderTarget` | eventId、occurrenceId/productId/batchId、targetStatus | 一个合并事件可引用多个计划时点或风险批次 |
+| `ReminderMaterializationCursor` | workspaceId、lastProcessedAt、version | 支持 Worker 与请求时补偿推进，不重复生成事件 |
+| `NotificationChannelCapability` | channel、availability、authorizationState、lastCheckedAt | 区分产品开关、平台能力和真实授权；R1 仅 in_app 可用 |
+| `NotificationDeliveryAttempt` | eventId、channel、deviceId、attempt、status、providerRef | 为未来外部渠道预留；R1 不伪造成功记录 |
+
+站内事件内容需要保存创建时的产品名、风险数值和时区快照，同时保留 source ID。展示时先校验当前来源状态：若事实已解决，事件自动转为 resolved；不得继续用过期快照制造未处理红点。
+
+### 13.5 全局配置与单品覆盖
+
+首次配置页建议值必须由用户确认后生效，不能因为产品有一个 09:00 或旧 `reminder_times` 就推定用户同意接收提醒：
+
+| 配置 | 建议初值 | 说明 |
+| --- | --- | --- |
+| 站内提醒总开关 | 开启 | 只控制站内事件；确认页明确说明不会在关闭 H5 后主动触达 |
+| 合并方式 | `time_window_digest` | 默认按早晨/中午/下午/晚上合并 |
+| 到点摘要 | 关闭 | 默认不在每个计划时点先提示一次 |
+| 漏记兜底 | 开启 | 只在实际时点后仍未记录时生成一次 |
+| 漏记宽限 | 30 分钟 | R1 固定；后续可评估是否开放 15/30/60 分钟 |
+| 低库存/无库存 | 开启 | 使用模块 10 的低库存阈值与首次不足时点 |
+| 临期/无法用完/过期 | 开启 | 使用模块 10 的批次风险投影 |
+| 四时段 | 全部启用 | 摘要时间建议 08:00 / 12:00 / 14:00 / 21:00，用户确认后保存 |
+
+单品覆盖只提供“继承全局”或“静默本产品”，分别控制计划、库存和有效期提醒。全局关闭优先级最高；单品不能设置 `force_on` 绕过全局选择。
+
+提醒设置和领域设置必须分开：
+
+- 修改 doseSlot 时间、数量或餐食关系，进入计划编辑并创建 ScheduleVersion。
+- 修改低库存计划日阈值或有效期提前天数，进入产品风险设置。
+- 修改是否提醒、合并方式和单品静默，只更新 ReminderPreference/Override，不增加计划版本或库存事件。
+
+关闭总开关时，未来 `scheduled` 事件转为 `cancelled_preference`，当前未读角标清除，既有事件保留在历史中；计划任务和风险卡仍正常显示。重新开启时只补建今天仍有效的待记录时点和当前未解决风险，不回放过去日期造成消息洪水。
+
+### 13.6 生成、触达与解决主流程
+
+```mermaid
+flowchart TD
+  A[计划 occurrence 或风险投影变化] --> B[提醒投影器读取有效偏好]
+  B --> C{类别是否启用且产品未静默}
+  C -- 否 --> D[不生成或取消未来事件]
+  C -- 是 --> E[计算 scheduledAt 和 dedupeKey]
+  E --> F[幂等创建 ReminderEvent + Targets]
+  F --> G{到达 availableAt}
+  G -- 是 --> H[站内提醒中心与角标可见]
+  H --> I{用户或业务事实变化}
+  I -- 打开 --> J[写 readAt 但仍未解决]
+  I -- 完成/补货/风险解除 --> K[resolved]
+  I -- 知道了/静默 --> L[dismissed]
+  I -- 计划/偏好失效 --> M[cancelled]
+  G -- Worker 延迟 --> N[下次请求执行有界补偿]
+  N --> H
+```
+
+提醒投影器只能消费模块 8–10 的稳定 ID 和 revision，不复制计划、库存或有效期算法。任何前端计算出的“下一次提醒”只是服务端响应的展示，不得自行持久化为另一套事件。
+
+### 13.7 计划提醒与四时段合并
+
+四时段边界直接复用模块 8：
+
+| 时段 | 范围 | 默认摘要时间 |
+| --- | --- | --- |
+| 早晨 | `[06:00, 10:30)` | 08:00 |
+| 中午 | `[10:30, 13:00)` | 12:00 |
+| 下午 | `[13:00, 17:30)` | 14:00 |
+| 晚上 | `[17:30, 24:00) ∪ [00:00, 06:00)` | 21:00 |
+
+#### 按时段摘要 `time_window_digest`
+
+1. 每个启用时段在自己的 summaryTime 最多生成一条 `plan_due` 摘要，合并该范围内所有尚未完成的 occurrence。
+2. 一个启用时段可以在摘要中提前概览其后连续关闭时段的 occurrence，直到下一个启用时段；这些项目必须标为“稍后”，不能写成“已到时间”。
+3. 关闭时段排在首个启用时段之前时，不向后绕到当天更晚的启用时段；例如只开晚上，不在晚上补发早晨项目。
+4. “只开早晨”表示早晨摘要可以概览全天；后续关闭时段不再生成到点摘要。
+5. summaryTime 只决定摘要出现时间，不改变 occurrence 的真实 localTime、完成判定、历史和库存。
+
+| 启用时段 | 摘要覆盖 |
+| --- | --- |
+| 全部启用 | 每个时段只覆盖自己 |
+| 早晨、下午 | 早晨覆盖早晨 + 中午；下午覆盖下午 + 晚上 |
+| 早晨、晚上 | 早晨覆盖早晨 + 中午 + 下午；晚上覆盖晚上 |
+| 仅早晨 | 早晨概览四个时段 |
+| 仅晚上 | 晚上只覆盖晚上；此前时段不补发 |
+
+#### 逐时点 `per_occurrence`
+
+- 每个 occurrence 在自己的 localTime 最多生成一条 `plan_due`，同一分钟的多个产品可以合并成一个事件，但 target 仍逐 occurrence 保存。
+- 用户完成部分 quantity 时，事件显示剩余量；完成全部 occurrence 后自动 resolved。
+- 同一产品一天多个时点分别提醒，不按产品日汇总。
+
+计划暂停、产品归档或 occurrence 被新版本取消时，未来事件取消；过去事件不删除。无库存不会让 occurrence 消失，但提醒内容标明“当前库存不足”，动作进入库存处理而不是允许伪成功打卡。
+
+### 13.8 漏记兜底
+
+漏记兜底只在 occurrence 的真实 localTime 之后判断：
+
+```text
+overdueAvailableAt = occurrenceAt + overdueGraceMinutes
+```
+
+规则：
+
+1. occurrence 在宽限时间内已经完整记录，不生成 `plan_overdue`。
+2. 部分记录时只提示剩余 quantity，不把整个时点写成“未服用”。
+3. 按时段摘要模式下，兜底只作用于该时段自身且该时段启用的 occurrence；被早期摘要概览的后续关闭时段不会在真正时点前触发，也不会另行兜底。
+4. 逐时点模式按 occurrence 兜底；同一分钟可合并。
+5. 到点摘要与漏记兜底是独立开关。二者都开时，用户可能先看到到点摘要，再在未记录时看到一次兜底，设置页明确说明这一结果。
+6. 本地日结束后未完成的 occurrence 按模块 9 进入历史状态；旧日不继续生成新提醒，也不反复追赶。
+
+“未记录”只代表系统没有有效 intake，不等于用户现实中没有服用。文案统一使用“还未记录”“待补记”，禁止使用“漏服”“未吃”作为确定事实。
+
+### 13.9 低库存、无库存与首次不足提醒
+
+库存提醒使用模块 10 的 `coveredPlanDayCount`、`firstShortfallOccurrenceAt`、stockState 和 projection revision：
+
+- 首次从正常进入 low，生成一条 `stock_low`。
+- 从 low 升级为 depleted 或出现更早的 first shortfall，生成新的升级事件。
+- 产品本来就 depleted 且无未来计划时，不生成含糊的“快用完”；补剂柜继续显示无库存事实。
+- `restockThresholdDays` 的文案始终是“可覆盖的计划服用日数阈值”，不写成自然日倒计时。
+- 提醒至少展示当前可用量、可完整覆盖计划日数和首次不足日历时点；无可计算计划时说明无法预测，不给假日期。
+- 产品暂停时，库存和有效期仍会变化；若有可计算的未来恢复计划或已经进入明确风险，风险提醒可继续。用户可单独静默库存类别。
+- 归档产品不生成新提醒；历史事件转为 resolved/cancelled，归档详情仍保留风险事实。
+
+默认一个 risk episode 只提醒一次，风险卡持续存在。用户选择“知道了”后不按天重复；只有补货后再次进入 low、短缺日期显著提前或严重程度升级才形成新 episode。
+
+### 13.10 临期、无法用完与过期提醒
+
+有效期提醒逐批次计算、按产品合并展示：
+
+1. 批次首次进入 `near_expiry` 时生成 `expiry_near`。
+2. FEFO 模拟显示有效期结束边界后仍有余额时，生成优先级更高的 `expiry_unfinishable`；它不被普通 near_expiry 事件吞掉。
+3. 当前本地日期越过结束边界且仍有余额时，生成 `expiry_expired`，并解决较低级事件。
+4. month/year 精度使用模块 10 的提醒早界和过期晚界；内容必须写“具体日期未知”，不能显示伪造的月初/月末包装日期。
+5. unknown 有效期不生成 near/expired 事件，只在批次页面保持“未记录有效期”。
+6. 批次耗尽、作废、有效期纠正或计划变化解除风险时，事件自动 resolved。
+7. 同一产品多个批次同日进入相同风险时可合并一条事件，详情列出每个批次和精度；dedupe 仍保留批次 target。
+
+提醒动作只包括查看批次、调整计划、补货、盘点/作废和“知道了”。产品不提供购买链接、药品建议或 AI 自动处置。
+
+### 13.11 ReminderEvent 状态机
+
+```mermaid
+stateDiagram-v2
+  [*] --> scheduled
+  scheduled --> available: 到达 availableAt 且仍有效
+  scheduled --> cancelled: 计划 偏好 产品状态失效
+  available --> resolved: 业务事实解除
+  available --> dismissed: 用户知道了或静默
+  available --> expired: 计划日结束且未需继续展示
+  dismissed --> resolved: 后续业务事实解除
+  dismissed --> available: 严重度升级或新 episode
+  resolved --> [*]
+  expired --> [*]
+  cancelled --> [*]
+```
+
+`readAt` 是独立时间戳，不是生命周期状态：打开提醒中心或详情只标为已读，不等于已完成、已补货或风险已解除。角标统计 `available && readAt is null`；“待处理”筛选统计 available，不因已读消失。
+
+计划事件到本地日结束后转 expired；风险事件不按日过期，而由事实解除、用户 dismiss 或新 episode 替换。删除事件不作为普通用户动作，避免失去提醒为何出现的审计链。
+
+### 13.12 页面与交互
+
+| 页面/区域 | 展示 | 主要操作 | 状态 |
+| --- | --- | --- | --- |
+| 一级页顶部铃铛 | 未读数或高优先级点 | 打开提醒中心 | 无事件/有未读/加载失败 |
+| 记录页摘要 | 下一站内提醒、涉及 occurrence 数、高优先级风险数 | 展开、进入对应时点/风险 | 开启/关闭/今日完成/部分待处理 |
+| 提醒中心 | 待处理、已读未解决、历史；按优先级和时间排序 | 查看、知道了、进入处理 | loading/empty/error/分页 |
+| 提醒详情 | 触发原因、时间、来源 revision、目标产品/批次/occurrence | 深链处理、静默类别 | 当前有效/已解决/已取消 |
+| 提醒设置 | 总开关、模式、到点/兜底、四时段、库存/有效期类别、能力状态 | 保存、恢复建议值、预览 | 未配置/已配置/冲突/保存失败 |
+| 产品详情 | 计划/库存/有效期三个单品覆盖摘要 | 分类别静默或恢复继承 | inherit/muted |
+
+提醒中心默认排序：已过期/无法用完/无库存 → 已到时未记录 → 低库存/临期 → 到点摘要 → 已读历史。同级按 availableAt 倒序；不能让大量普通计划摘要淹没风险事件。
+
+设置中的“预览提醒”只在当前页面展示示例卡片，不写入 ReminderEvent，不产生未读角标，也不能被统计为真实触达。
+
+### 13.13 文案、深链与业务动作
+
+提醒文案只描述可证明事实：
+
+| 类型 | 推荐表达 | 禁止表达 |
+| --- | --- | --- |
+| 到点摘要 | “08:00 计划：3 个时点待记录” | “你必须马上服用” |
+| 漏记兜底 | “08:00 的 2 个时点还未记录” | “你漏服了 2 种” |
+| 低库存 | “鱼油还可完整覆盖 4 个计划服用日，预计 9 月 23 日首次不足” | “4 天后一定用完” |
+| 无法用完 | “按当前计划，批次在有效期边界后预计仍有余量” | “继续吃会有危险” |
+| 月精度临期 | “有效期标为 2027-03，具体日期未知，已进入提醒区间” | “将在 2027-03-01 过期” |
+
+深链打开后必须重新授权并刷新当前来源：
+
+- 计划事件进入记录页并定位 occurrence；用户仍通过模块 9 的正常 intake 命令记录，不在提醒事件上伪造完成。
+- 低库存/无库存进入产品批次页或补货流程。
+- 临期/无法用完/过期进入对应批次及风险解释。
+- 来源已解决时显示“该事项已处理”和最新状态，不跳转到不存在或无权访问的资源。
+- 用户 B 获得用户 A 的 event/deep link ID 时，不泄露标题、产品名、风险类型或资源存在性。
+
+### 13.14 时区、计划变化与跨日
+
+- 提醒计划使用 occurrence/ScheduleVersion 保存的 IANA 时区，不读取 Worker 所在服务器时区。
+- 用户设备时区与工作区时区不同时，设置页和事件详情显示“按 Asia/Shanghai 计划”；不自动漂移到设备时间。
+- 工作区时区显式变更时，旧版本事件保留旧时区快照；未来 scheduled 事件取消并按新版本重建。
+- 夏令时不存在/重复时间沿用模块 8 生成的唯一 occurrenceAt；提醒 dedupe 使用 occurrenceId，不能重复出现两条。
+- 晚上时段跨 00:00，但 occurrence 的 localDate 仍由计划版本确定；23:30 与次日 01:00 属于各自的计划自然日，不因都标为“晚上”合并到错误日期。
+- 客户端长时间挂起后恢复，先向服务端同步当前时间和 cursor；不能用浏览器 `setTimeout` 补发一串过期事件。
+
+### 13.15 幂等、去重、补偿与故障恢复
+
+建议 dedupe key：
+
+```text
+计划到点：plan_due:{groupingVersion}:{summaryBucketOrOccurrenceId}
+漏记兜底：plan_overdue:{occurrenceId}:{gracePolicyVersion}
+风险事件：risk:{type}:{productId}:{episodeId}
+```
+
+生成采用至少一次任务 + 数据库唯一键实现结果幂等。Worker 重启、任务重试、两台 Worker 并发或用户同时从两台设备打开，均不得创建重复 ReminderEvent。
+
+请求时补偿规则：
+
+1. 用户打开 H5 时，服务端检查 materialization cursor 并补齐当前本地日仍有效的计划事件与当前 active 风险 episode。
+2. 不补建过去自然日的 plan_due/overdue，避免久未登录后收到历史洪水。
+3. 风险事件只补当前仍未解决且未被当前 episode dismiss 的事项。
+4. 补偿失败时页面仍显示今日任务和产品风险事实，并标注“提醒状态暂时无法更新”；不能把业务页变成空白。
+5. Worker 恢复后从持久 cursor 继续；失败任务记录非敏感错误码、重试次数和下一次重试时间。
+
+计划保存、暂停/恢复、intake 创建/撤销、更正、补货、盘点、批次日期变化、归档和工作区时区变化都必须发布可重放的领域变更，触发提醒投影更新。提醒更新失败不得回滚已成功的核心业务事务，但必须可补偿并告警。
+
+### 13.16 通知能力与权限模型
+
+“用户偏好”“平台能力”“设备授权”是三个不同维度：
+
+| 维度 | 示例状态 | 说明 |
+| --- | --- | --- |
+| 用户偏好 | enabled / disabled / product_muted | 用户是否希望该类提醒出现 |
+| 渠道能力 | available / unsupported / deferred / temporarily_unavailable | 当前客户端和版本是否实现该渠道 |
+| 设备授权 | not_required / not_requested / granted / denied / revoked / unknown | 仅对需要平台权限的未来外部渠道有意义 |
+
+R1：
+
+- `in_app`：capability=available，authorization=not_required。
+- `web_push`、`wechat_subscription`、`email`、`sms`：capability=deferred，不出现在普通设置开关中。
+- 页面只展示“站内提醒”，不弹浏览器通知权限，不注册推送订阅，不保存假 device token。
+
+未来增加外部渠道时必须满足：
+
+1. 用户在明确用途说明后主动开启，权限请求由用户动作触发。
+2. 客户端真实授权结果回传服务端；服务端开关不能把 denied 写成 granted。
+3. 拒绝后不在每次打开页面重复索权，提供查看当前状态和平台设置指引。
+4. 每个设备/订阅独立记录，退出、撤销授权或账户删除后失效。
+5. 外部投递使用同一 ReminderEvent/Target 和 dedupe 事实，不重建另一套计划、风险或完成状态。
+6. 只有 provider 明确受理不等于用户已看到；delivered/read 等状态必须按渠道真实能力命名。
+
+### 13.17 Demo 体验
+
+- 隔离 Demo 可以体验站内提醒中心、未读、已读、知道了和深链，但所有事件只引用该 Demo 工作区。
+- Demo 首次进入可预置已经由示例事实生成的提醒事件；卡片持续显示“演示数据”，不能冒充用户记录。
+- Demo 不请求任何外部通知权限，不创建 push/subscription token，不承诺离开页面后触达。
+- Demo 24 小时生命周期结束时，提醒偏好、事件、targets 和 cursor 随工作区一起清理。
+- 注册/登录后不把 Demo 已读状态或静默偏好迁入真实账户。
+
+### 13.18 当前实现与目标差距
+
+| 能力 | MVP/Web 历史 | 当前 Uni（代码核对） | 目标处理 |
+| --- | --- | --- | --- |
+| 提醒事实 | PRD 定义四时段/到点/兜底；代码主要是本地总开关、下一时间和风险摘要 | 只有 `reminder_times[]`、风险阈值和页面“应用内提醒时间” | 服务端 ReminderPreference/Event/Target/Cursor |
+| 计划粒度 | 当前代码按产品/天和第一个时间汇总 | 今日同样按产品/天，只显示第一个 reminderTime | 消费模块 8 的逐 doseSlot occurrence |
+| 历史与时区 | 浏览器当前日期、本地 localStorage | 主要按 UTC date，无工作区 IANA 提醒模型 | occurrence 时区快照与服务端 materialization |
+| 站内中心 | 今日页铃铛展开字符串摘要，已读靠 hash | 无提醒中心、未读或事件 API | 独立中心、生命周期、readAt 与深链 |
+| 全局/单品设置 | 代码只有一个 `reminderEnabled` | 产品可编辑 reminder time 和两个风险阈值，无提醒偏好 | 全局分类开关 + inherit/muted 覆盖 |
+| 到点与漏记 | PRD 有规则，代码没有真实调度和触达 | 没有 scheduler、event 或 dedupe | Worker + 请求补偿 + occurrence 去重 |
+| 库存/临期 | 本地即时拼摘要 | 服务端可算基础 risk，但无风险 episode/reminder | 消费模块 10 统一投影和 revision |
+| 权限状态 | 设置文案有“提醒授权”，实际无平台授权模型 | D-012 明确 H5 首期站内 | R1 not_required；外部渠道 deferred 且不展示假开关 |
+| 跨设备 | Web 整包/localStorage 状态 | 计划和风险在服务端，提醒状态未建模 | 已读、静默、处理状态服务端同步 |
+| 默认值 | 09:00、阈值和总开关可静默默认 | 服务端缺失 reminder 时自动填 09:00 | doseSlot 与 opt-in 分离，迁移用户先确认 |
+
+### 13.19 迁移策略
+
+1. 先完成模块 8 的 `reminder_times[] → doseSlots[]` 迁移；这些时间只作为计划时点，不等同提醒授权。
+2. 当前 Uni 没有可证明的 ReminderPreference；注册用户迁移为 `needs_confirmation`，不因历史默认 09:00 自动制造未读事件。
+3. 首次进入提醒设置时展示从现有计划推导的预览和建议初值，用户保存后才成为 enabled preference。
+4. MVP/Web 的 `reminderEnabled`、四时段配置或单品静默若用户主动导入，可作为候选逐项确认；localStorage 值不能后台静默写入真实账户。
+5. 已存在的 `restock_threshold_days` 和 `expiry_reminder_days` 继续作为风险计算阈值，不自动代表用户开启风险提醒。
+6. Demo 直接使用明确标识的预置偏好，不参与真实用户同意迁移。
+7. 迁移审计检查：每个 scheduled/available 事件必须能关联有效 source 和 preference version；无来源的旧摘要不迁移为事件。
+
+模块 6 历史文字中的“至少一个提醒时间”在目标模型中解释为“至少一个已确认 doseSlot.localTime”；通知是否开启由本模块独立确认，不以该字段推断。
+
+### 13.20 指标与系统不变量
+
+指标只用于评估产品触达，不把“未记录”解释为真实未服用：
+
+| 指标 | 口径 |
+| --- | --- |
+| 站内提醒配置完成率 | 打开配置且成功保存有效 preference 的工作区 ÷ 打开配置的工作区 |
+| 提醒查看率 | 有 available 事件的工作区中，在事件有效期内写入 readAt 的占比 |
+| 计划提醒行动率 | plan_due/overdue available 后，在其 occurrence 上形成有效 intake 或补录的事件占比 |
+| 风险行动率 | 风险事件 available 后 7 个本地自然日内完成补货、计划调整、盘点/作废或明确“知道了”的事件占比 |
+| 噪音指标 | 用户在提醒出现后 24 小时内关闭全局或静默该类别/产品的比例 |
+| 重复事件率 | 同一 dedupeKey 出现多条活动事件的比例，目标 0 |
+| 状态延迟 | 来源事实解决到 event resolved 的时间，按 P50/P95 分开 |
+
+必须满足：
+
+- 提醒关闭、未读、已读、dismissed 不改变 occurrence、intake、库存、成本、成分或风险事实。
+- 同一 occurrence/type/policy version 最多一个活动提醒 target。
+- 同一风险 episode/type 最多一个活动事件；严重程度升级可以创建新 episode。
+- 所有时间使用来源版本的 IANA 时区；服务器/浏览器时区不得改变结果。
+- reminder event 不能成为“今天是否该服”“库存是否不足”或“批次是否过期”的权威。
+- 用户完成或撤销核心业务动作后，提醒最终必须通过事件或补偿收敛到对应状态。
+- 外部渠道未实现时，真实投递成功数必须为 0，不得用站内 available 冒充 delivered。
+
+### 13.21 交付顺序
+
+| 阶段 | 必须交付 |
+| --- | --- |
+| R1 H5 站内闭环 | 独立 preference、服务端事件/target/cursor、计划兜底、风险 episode、未读/已读/解决、提醒中心、设置、全局与单品静默、时区和幂等测试 |
+| R2 完整体验 | 四时段摘要/逐时点切换、深链、历史筛选、风险合并详情、配置预览、迁移审计和浏览器 E2E |
+| R3/R4 外部渠道 | 经过单独需求和权限评审后接入 Web Push/微信等适配器；仍消费同一 event，不承诺尚未验证的 delivered/read |
+
+R1 不以外部通知为上线门槛，但不能只做一个前端铃铛字符串：事件必须服务端持久化、跨设备一致、可去重并能在 Worker 延迟后补偿，否则后续渠道会建立在不可信状态上。
+
+### 13.22 验收标准
+
+- Given 用户关闭站内提醒，When 新计划日到来，Then 今日任务仍正常生成，且没有新的站内事件或未读角标。
+- Given 用户开启漏记兜底、关闭到点摘要，When occurrence 到时后 30 分钟仍无有效 intake，Then 只生成一条 `plan_overdue`。
+- Given 用户在宽限期内完成 occurrence，When Worker 执行，Then 不生成 overdue；已有 due 事件自动 resolved。
+- Given 用户只记录计划量的一部分，When 兜底触发，Then 提示剩余 quantity，不写成完全未记录。
+- Given 早晨摘要覆盖早晨与关闭的中午时段，When 08:00 展示，Then 中午项目标为“稍后”；不得在 08:30 把中午项目写成漏记。
+- Given 只启用晚上时段，When 早晨 occurrence 未记录，Then 晚上不补发该早晨到点摘要。
+- Given 用户开启逐时点模式且产品有 08:00、20:00 两个 slot，When 到各自时间，Then 分别生成基于两个 occurrenceId 的事件。
+- Given 两台 Worker 同时处理同一 occurrence，When 提交事件，Then 数据库唯一键只保留一个活动 target。
+- Given 用户单品静默产品 A 的计划提醒，When A 与 B 同时到点，Then 合并事件只包含 B；A 仍出现在今日任务。
+- Given 全局计划提醒关闭而库存提醒开启，When 产品进入 low，Then 仍可生成 stock_low；全局总开关关闭时则不生成任何站内事件。
+- Given 产品还可覆盖 4 个计划服用日且首次不足日期为 9 月 23 日，When stock_low 生成，Then 文案同时展示两个事实，不写“4 天后用完”。
+- Given low 事件已选择“知道了”且事实未变化，When 次日重算，Then 不重复提醒；When 升级为 depleted，Then 生成新的升级事件。
+- Given 批次有效期只有 `2027-03`，When 进入提醒区间，Then 事件写明具体日期未知，不显示伪造的 3 月 1 日过期。
+- Given 同一产品两个批次同时 near_expiry，When 提醒生成，Then 可以一条产品事件展示两个批次，targets 和详情仍逐批次可追溯。
+- Given 用户打开未读事件，When 未执行业务动作，Then 只写 readAt，状态仍 available；补货解除风险后才 resolved。
+- Given 用户修改工作区时区并生成未来计划版本，When 重建提醒，Then 旧 scheduled 事件取消、新事件使用新时区，历史已读事件不漂移。
+- Given Worker 停止一天后用户打开 H5，When 请求时补偿运行，Then 只生成今天仍有效的计划事件和当前风险，不补发昨天的计划提醒。
+- Given 外部通知渠道尚未实现，When 查看设置，Then 只显示站内提醒；不出现可操作的 Web Push/微信订阅消息开关。
+- Given Demo 用户查看提醒中心，When 打开事件，Then 内容持续标识演示数据，且不请求系统通知权限。
+- Given 用户 B 请求用户 A 的 ReminderEvent ID，When 服务端校验，Then 不返回产品名、类型或资源存在性。
+
+### 13.23 本模块确认点
+
+本模块建议冻结以下产品判断：
+
+1. H5 首期只做服务端持久化的站内提醒；不展示 Web Push、微信订阅消息等假入口，也不承诺关闭页面后触达。
+2. doseSlot 时间是计划事实，ReminderPreference 是触达选择；关闭提醒绝不关闭计划、记录或风险计算。
+3. 默认采用四时段合并、到点摘要关闭、真实时点后 30 分钟漏记兜底开启；用户确认后才生效。
+4. “未记录”不等于“未服用”；漏记兜底只能在 occurrence 真实时点之后出现，不能因提前摘要过早判定。
+5. 低库存、首次不足、临期、无法用完和过期只消费模块 10 的 risk projection，并按 episode 去重和升级。
+6. 打开只产生 readAt；完成、补货或风险解除才 resolved；“知道了”只是 dismiss，不能改写来源事实。
+7. 全局开关优先于单品 `inherit/muted`；风险阈值、doseSlot 和提醒偏好分别在所属领域修改。
+8. Worker 与请求时补偿共享 dedupe/cursor；旧日计划提醒不追补，当前风险和今日待办必须最终收敛。
+
+请确认模块 13。确认后，模块 14 将定义补剂 AI、笔记与健康上下文，包括 AI 可读数据、明确拒答、引用、上下文授权、会话与笔记关系、失败降级和成本控制。

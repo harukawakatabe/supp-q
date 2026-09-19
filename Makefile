@@ -17,7 +17,7 @@ test:
 	cd server && GOCACHE=$(GOCACHE) go test ./...
 
 test-integration:
-	cd server && test -n "$(SUPPQ_TEST_DATABASE_URL)" && GOCACHE=$(GOCACHE) SUPPQ_TEST_DATABASE_URL="$(SUPPQ_TEST_DATABASE_URL)" go test ./internal/identity ./internal/catalog ./internal/recognition -count=1 -v
+	cd server && test -n "$(SUPPQ_TEST_DATABASE_URL)" && GOCACHE=$(GOCACHE) SUPPQ_TEST_DATABASE_URL="$(SUPPQ_TEST_DATABASE_URL)" go test ./migrations ./internal/identity ./internal/catalog ./internal/recognition -count=1 -v
 
 test-restart-persistence:
 	./scripts/restart-persistence.sh

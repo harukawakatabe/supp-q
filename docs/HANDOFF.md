@@ -4,6 +4,9 @@
 
 `uni/` is the only active implementation. The complete product contract is
 confirmed, and `docs/IMPLEMENTATION_PLAN_R1.md` is the current execution plan.
+The R1 platform-spine migration at implementation commit `086d2f9` is locally
+verified on fresh and synthetic current snapshots; remaining R1 schema groups
+and every production Gate are still open.
 The code is still a locally accepted H5 release candidate with the deterministic supplement loop, invitation identity, private
 three-image recognition boundary, Records/product/Me surfaces, account/file
 cleanup, production Compose/Caddy, health/metrics, encrypted backup/restore
@@ -23,14 +26,16 @@ or provider has been selected.
 4. `prd/PRD.md`
 5. `docs/IMPLEMENTATION_PLAN_R1.md`
 6. `docs/R1_GATE_CHECKLIST.md`
-7. `docs/DESIGN.md` and `docs/DESIGN_IMPLEMENTATION_R1.md` for UI work
-8. `docs/PROJECT_STATUS.md`
-9. `docs/DECISIONS.md`
-10. `docs/ARCHITECTURE.md`
-11. `docs/DEVELOPMENT_VS_PRODUCTION.md`
-12. `docs/EXTERNAL_RESOURCES.md`
-13. `docs/SECURITY.md`
-14. `contracts/openapi.yaml`
+7. `docs/EXECUTION_REGISTRY_R1.md`
+8. `docs/SCHEMA_R1.md` for schema/domain work
+9. `docs/DESIGN.md` and `docs/DESIGN_IMPLEMENTATION_R1.md` for UI work
+10. `docs/PROJECT_STATUS.md`
+11. `docs/DECISIONS.md`
+12. `docs/ARCHITECTURE.md`
+13. `docs/DEVELOPMENT_VS_PRODUCTION.md`
+14. `docs/EXTERNAL_RESOURCES.md`
+15. `docs/SECURITY.md`
+16. `contracts/openapi.yaml`
 
 The archived Launch-Beta/product-generation documents under `archive/` are
 historical evidence only. The sibling `web/`, `mvp/`, and `demo/` directories are frozen. Inspect only;
@@ -63,6 +68,12 @@ docker-compose -f deploy/compose.dev.yml exec -T api \
 
 `make down` preserves data volumes. Never remove volumes unless the user
 explicitly authorizes destroying local data.
+
+At this checkout, `pnpm@11.24.0` is installed while `app/package.json` declares
+`pnpm@11.9.0`. Automatic version switching failed when the registry signature
+could not be fetched. The 2026-09-19 verification therefore called the existing
+`node_modules/.bin` tools directly; RG1 must pin and execute one verified package
+manager path in active hosted CI.
 
 ## Production path
 

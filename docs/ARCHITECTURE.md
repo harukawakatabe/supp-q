@@ -66,6 +66,21 @@ server/
 
 This follows the Go convention of keeping server packages under `internal` and separate programs under `cmd`.
 
+## R1 platform spine
+
+Migration `202609190001_r1_platform_spine.sql` is locally verified and adds:
+
+- immutable workspace timezone versions plus a compatibility pointer;
+- `client_actions` for target command idempotency;
+- `domain_changes` and per-consumer receipts for the durable outbox path;
+- projection-revision freshness metadata;
+- minimal quarantine records for legacy OTC/prescription Product rows.
+
+Current handlers do not yet write ClientAction/DomainChange or read target
+projections. The new tables are an expand-only foundation; the current
+Launch-Beta data path remains authoritative until later compatibility and
+cutover slices pass reconciliation.
+
 ## Identity
 
 ### Registered

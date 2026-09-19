@@ -46,6 +46,8 @@ Homebrew `docker-compose` binary.
 - `prd/PRD.md` — confirmed complete product truth
 - `docs/IMPLEMENTATION_PLAN_R1.md` — current R1 workstreams and dependency order
 - `docs/R1_GATE_CHECKLIST.md` — RG0–RG9 evidence status
+- `docs/EXECUTION_REGISTRY_R1.md` — work IDs, owner status, CI boundary, evidence locations
+- `docs/SCHEMA_R1.md` — target physical schema and migration sequence
 - `docs/DESIGN.md` — user-provided UI direction
 - `docs/DESIGN_IMPLEMENTATION_R1.md` — R1 adaptation of that direction
 - `docs/PROJECT_STATUS.md` — implemented versus planned

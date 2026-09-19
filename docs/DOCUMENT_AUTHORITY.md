@@ -20,13 +20,15 @@ visual language is adapted to the R1 mobile H5 product.
 | 1 | `prd/PRD.md` | Complete confirmed product contract, scope, rules, data, NFRs, and acceptance |
 | 2 | `docs/IMPLEMENTATION_PLAN_R1.md` | Current R1 implementation sequence and work packages |
 | 3 | `docs/R1_GATE_CHECKLIST.md` | Current RG0–RG9 release evidence checklist |
-| 4 | `docs/DESIGN.md` | User-provided visual direction and design inspiration |
-| 5 | `docs/DESIGN_IMPLEMENTATION_R1.md` | Product-specific UI adaptation and visual acceptance contract |
-| 6 | `docs/PROJECT_STATUS.md` | Implemented, verified, planned, and production status |
-| 7 | `docs/ARCHITECTURE.md` | Current implemented architecture baseline; cannot narrow the PRD |
-| 8 | `docs/DECISIONS.md` | Technical and phased-delivery decisions |
-| 9 | `contracts/openapi.yaml` | Implemented API contract only, not the complete target API |
-| 10 | Task-specific security, identity, error, environment, external-resource, recognition, and handoff docs | Supporting implementation contracts |
+| 4 | `docs/EXECUTION_REGISTRY_R1.md` | Work IDs, role ownership status, CI boundary, and evidence locations |
+| 5 | `docs/SCHEMA_R1.md` | R1 physical schema and expand/backfill/cutover contract |
+| 6 | `docs/DESIGN.md` | User-provided visual direction and design inspiration |
+| 7 | `docs/DESIGN_IMPLEMENTATION_R1.md` | Product-specific UI adaptation and visual acceptance contract |
+| 8 | `docs/PROJECT_STATUS.md` | Implemented, verified, planned, and production status |
+| 9 | `docs/ARCHITECTURE.md` | Current implemented architecture baseline; cannot narrow the PRD |
+| 10 | `docs/DECISIONS.md` | Technical and phased-delivery decisions |
+| 11 | `contracts/openapi.yaml` | Implemented API contract only, not the complete target API |
+| 12 | Task-specific security, identity, error, environment, external-resource, recognition, and handoff docs | Supporting implementation contracts |
 
 ## Conflict rules
 
@@ -47,7 +49,8 @@ visual language is adapted to the R1 mobile H5 product.
 | Area | Active documents | Maintenance rule |
 | --- | --- | --- |
 | Product | `prd/PRD.md` | Change confirmed behavior only through a reviewed ChangeSpec |
-| R1 delivery | `IMPLEMENTATION_PLAN_R1.md`, `R1_GATE_CHECKLIST.md` | Update work/gate status with evidence, not expectation |
+| R1 delivery | `IMPLEMENTATION_PLAN_R1.md`, `R1_GATE_CHECKLIST.md`, `EXECUTION_REGISTRY_R1.md` | Update work/gate status with evidence, not expectation |
+| R1 data | `SCHEMA_R1.md`, `../server/migrations/`, `../scripts/sql/` | Expand before cutover; retain reconciliation and compatibility evidence |
 | UI | `DESIGN.md`, `DESIGN_IMPLEMENTATION_R1.md` | Preserve the user source; evolve the adaptation spec with visual review |
 | Current truth | `PROJECT_STATUS.md`, `HANDOFF.md`, `README.md` | Update after every material implementation or release change |
 | Architecture | `ARCHITECTURE.md`, `DECISIONS.md`, `DEVELOPMENT_VS_PRODUCTION.md` | Separate current implementation from approved target |

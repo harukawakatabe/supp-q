@@ -1,6 +1,6 @@
 # R1 Physical Schema Specification
 
-Status: draft implementation specification; platform spine implemented first
+Status: draft implementation specification; platform spine verified locally at `086d2f9`
 Authority: derives from `../prd/PRD.md` sections 15–16 and does not change scope
 Migration strategy: expand → backfill → compatibility → validate → later contract
 Last updated: 2026-09-19

@@ -27,12 +27,14 @@ Read these files before changing code:
 2. `prd/PRD.md`
 3. `docs/IMPLEMENTATION_PLAN_R1.md`
 4. `docs/R1_GATE_CHECKLIST.md`
-5. `docs/DESIGN.md` and `docs/DESIGN_IMPLEMENTATION_R1.md` for UI work
-6. `docs/DECISIONS.md`
-7. `docs/ARCHITECTURE.md`
-8. `docs/PROJECT_STATUS.md`
-9. `docs/HANDOFF.md`
-10. The task-specific document under `docs/`
+5. `docs/EXECUTION_REGISTRY_R1.md`
+6. `docs/SCHEMA_R1.md` for schema/API/domain work
+7. `docs/DESIGN.md` and `docs/DESIGN_IMPLEMENTATION_R1.md` for UI work
+8. `docs/DECISIONS.md`
+9. `docs/ARCHITECTURE.md`
+10. `docs/PROJECT_STATUS.md`
+11. `docs/HANDOFF.md`
+12. The task-specific document under `docs/`
 
 ## Frozen Areas
 

@@ -29,6 +29,8 @@
 | D-023 | Non-H5 upload adapters are not an H5 launch gate. | The first surface is H5; WeChat remains explicitly deferred and must not hold back H5 acceptance. |
 | D-024 | The confirmed complete product contract is `prd/PRD.md`; the old Launch-Beta PRD is archived. | Prevent the smaller implemented baseline from silently becoming the final scope. |
 | D-025 | `docs/DESIGN.md` is an active user-provided UI direction and must be preserved. | R1 adapts its Clay-inspired visual language through `docs/DESIGN_IMPLEMENTATION_R1.md`; mobile task clarity, accessibility, and page-level user review decide literal application. |
+| D-026 | Keep the current parent Git root during local R1 work; do not create a root workflow outside `uni/`. Prefer extracting `uni/` into its own repository before RG1. | The current portable workflow assumes `uni/` is root, while all new project files are required to stay under `uni/`; hosted CI therefore remains inactive until an explicit repository operation. |
+| D-027 | R1 schema migration uses expand/backfill/compatibility/validate/later-contract stages. The first migration adds only the platform spine and quarantine evidence. | Existing Launch-Beta reads/writes must stay functional while immutable versions and projections are reconciled; no destructive cutover is justified yet. |
 
 ## Pending external choices
 

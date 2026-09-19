@@ -31,12 +31,16 @@ Confidence:
 ## Current execution phase
 
 - R1 workstreams and dependencies: `IMPLEMENTATION_PLAN_R1.md`.
-- Release evidence: `R1_GATE_CHECKLIST.md`; RG0 is partial and RG1–RG9 are not
-  accepted for target R1.
+- Execution/owners: `EXECUTION_REGISTRY_R1.md`; actual human owner names and
+  hosted CI activation remain open.
+- Physical schema: `SCHEMA_R1.md`; the first platform-spine migration is locally
+  verified, while the remaining R1 expand/backfill groups are open.
+- Release evidence: `R1_GATE_CHECKLIST.md`; RG0–RG4 are partial where noted and
+  no production Gate is accepted for target R1.
 - UI direction: user-provided `DESIGN.md`, adapted through
   `DESIGN_IMPLEMENTATION_R1.md`.
-- No R1 implementation slice has been claimed complete by this documentation
-  update.
+- No complete R1 vertical slice has been claimed; only the S1 platform-spine
+  sub-slice has `VERIFIED_LOCAL` evidence.
 
 ## Shipped to production
 
@@ -66,7 +70,13 @@ or accepted recognition provider has been supplied.
 
 ### Data, recognition, and tenancy
 
-- PostgreSQL migrations through `202608210001`; six-decimal quantities,
+- PostgreSQL migrations through `202609190001`; the new, currently unused R1
+  platform spine adds workspace timezone versions, ClientAction, DomainChange,
+  consumer receipts, projection revisions, and unsupported-product quarantine.
+- Fresh, synthetic Launch-Beta snapshot upgrade, compatibility and pre-target-
+  write rollback tests pass for implementation commit `086d2f9`; this does not
+  mean the remaining target schema/backfills are implemented.
+- Six-decimal quantities,
   transactionally consistent FEFO allocation, idempotency, and tenant scope on
   private resources.
 - Day-cycle history remains non-retroactive when the current plan changes.

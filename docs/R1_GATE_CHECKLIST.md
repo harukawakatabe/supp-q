@@ -22,7 +22,7 @@ and a stable evidence location.
 | --- | --- | --- |
 | RG0 Contract ready | `PARTIAL` | PRD is confirmed; named owners and target physical schema/OpenAPI/error/migration specifications remain open |
 | RG1 Repeatable build | `PARTIAL` | Historical Launch-Beta local checks passed; target R1 and active root CI have not |
-| RG2 Migration safe | `OPEN` | Target expand/backfill/reconciliation migrations do not exist |
+| RG2 Migration safe | `PARTIAL` | The platform spine passes fresh/synthetic-current upgrade and rollback; product/capture/plan/intake/reminder backfills, lock rehearsal and production-like evidence remain open |
 | RG3 Domain/security correct | `PARTIAL` | Current FEFO/idempotency/tenant foundation exists; complete R1-applicable Q1–Q9 coverage does not |
 | RG4 H5 experience | `PARTIAL` | Current Chromium Launch-Beta path exists; target IA/design/accessibility/browser matrix does not |
 | RG5 Performance/resilience | `OPEN` | Target load, SLO, failure injection, alert and recovery evidence is absent |
@@ -57,15 +57,20 @@ Pass owner: Engineering + QA.
 
 ## RG2 — Migration safe
 
-- [ ] Empty database `up` succeeds.
-- [ ] A representative current Launch-Beta snapshot upgrades without reset.
-- [ ] Source inventory includes state/type/timezone/price/job/file anomalies.
+- [x] Empty database `up` succeeds for the platform-spine migration.
+- [x] A representative synthetic current Launch-Beta snapshot upgrades without reset.
+- [x] Source inventory includes state/type/timezone/price/job/file anomalies.
 - [ ] Backfill is cursor-based, idempotent, resumable, and observable.
 - [ ] Lock targets and the ≤15-minute final-delta window pass rehearsal.
 - [ ] Product/plan/intake/inventory/cost/file/timezone counts and invariants reconcile.
-- [ ] OTC/prescription rows are quarantined and individually accounted for.
-- [ ] Old application compatibility, rollback artifact, backup and restore point are proven.
-- [ ] Contract/drop migration remains deferred to a later release.
+- [x] OTC/prescription fixture rows are quarantined and individually accounted for.
+- [x] Existing identity/catalog/recognition integration paths and pre-target-write Down rollback pass locally.
+- [ ] Production-like backup/restore point, old deployed binary compatibility, and real snapshot reconciliation are proven.
+- [x] Contract/drop migration remains deferred to a later release.
+
+Current evidence: implementation commit `086d2f9` and
+`../reports/r1/2026-09-19-s1-platform-spine/README.md`. All checked items above
+are local/synthetic evidence, not staging or production acceptance.
 
 Pass owner: Engineering + Domain/Data + QA.
 

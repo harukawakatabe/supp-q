@@ -65,9 +65,9 @@ Gate acceptance and all production promotion.
 | S0-04 | Evidence locations and classification | `DONE_LOCAL` | Section 5 |
 | S0-05 | ChangeSpec template | `DONE_LOCAL` | `templates/CHANGE_SPEC.md` |
 | S1-01 | Target physical schema specification | `DRAFT_IMPLEMENTATION_SPEC` | `SCHEMA_R1.md`; review pending |
-| S1-02 | Current-snapshot inventory queries | `DONE_LOCAL` | `../scripts/sql/r1_source_inventory.sql` |
-| S1-03 | Platform-spine expand migration | `IMPLEMENTED_UNVERIFIED` | Migration and integration test; status updates after execution |
-| S1-04 | Fresh/current-snapshot migration rehearsal | `OPEN` | Requires PostgreSQL-backed test evidence |
+| S1-02 | Current-snapshot inventory queries | `VERIFIED_LOCAL` | `../scripts/sql/r1_source_inventory.sql`; isolated PostgreSQL execution passed |
+| S1-03 | Platform-spine expand migration | `VERIFIED_LOCAL` | Implementation commit `086d2f9`; fresh/upgrade/rollback tests passed |
+| S1-04 | Fresh/current-snapshot migration rehearsal | `VERIFIED_LOCAL` | Synthetic Launch-Beta fixture; evidence in `../reports/r1/2026-09-19-s1-platform-spine/README.md` |
 | S1-05 | Remaining R1 expand/backfill migrations | `NOT_STARTED` | Product/capture/plan/intake/reminder tables after S1-03 review |
 
 State vocabulary:
@@ -98,12 +98,12 @@ timestamp, and skip/N/A reason.
 The next valid transition is:
 
 ```text
-S1-03 migration exists
-→ fresh database migration test
-→ pre-migration current-snapshot fixture
-→ upgrade and reconciliation
-→ mark S1-03/S1-04 VERIFIED_LOCAL
-→ review schema before adding product/plan/capture backfills
+platform spine VERIFIED_LOCAL at 086d2f9
+→ accountable engineering/domain review of SCHEMA_R1.md
+→ E2 product/profile/ingredient expand migration
+→ synthetic current-snapshot backfill and reconciliation
+→ compatibility service reads/writes
+→ continue E3–E6 only after E2 evidence passes
 ```
 
 Do not claim S1 complete when only the platform spine passes. S1 closes only

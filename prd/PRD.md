@@ -5551,3 +5551,575 @@ stateDiagram-v2
 8. 当前 OpenAPI 只算 launch-beta 事实；完整资源面按 R1–R4 交付，迁移与兼容顺序留给模块 18，不把目标接口写成已上线。
 
 请确认模块 16。确认后，模块 17 将建立埋点事件、指标计算、邀请/运营管理、任务监控、告警与可观测性合同，并继续遵守去内容化和租户隔离原则。
+
+## 17. 埋点、运营管理与可观测性
+
+### 17.1 模块目标
+
+本模块把模块 3 的产品指标、模块 5–16 的核心事实和当前 Uni 的运行底座连接成三套互不冒充的系统：
+
+1. 产品分析回答“用户是否完成可信建档、形成持续管理、在风险出现后采取行动”。
+2. 运营管理回答“邀请、任务、配额、删除与供应商是否需要人工处理”。
+3. 工程可观测性回答“哪一个服务、依赖、发布版本或队列正在失败，如何定位”。
+
+页面浏览量不能代替业务结果，Prometheus 指标不能代替产品埋点，业务埋点也不能成为 Product、Intake、InventoryEvent 等事实源。所有指标先冻结分子、分母、时间窗口、排除项和数据版本，再讨论目标值。
+
+本模块沿用模块 16 的 `VERIFIED_CURRENT / APPROVED_TARGET / DEFERRED / NOT_IN_SCOPE` 标记。当前没有真实用户基线，M1–M10 继续保持 `UNMEASURED`；本模块只让它们可计算，不虚构达标数字。
+
+### 17.2 当前可观测与运营基线
+
+| 能力 | 当前代码核对 | 状态与限制 |
+| --- | --- | --- |
+| HTTP 指标 | `/metrics` 输出总请求、5xx、in-flight、总耗时 | `VERIFIED_CURRENT`；进程内累计、重启归零，缺路由模板、状态码分布和延迟 histogram |
+| 队列指标 | recognition queued/running/failed gauge | `VERIFIED_CURRENT`；只有识别任务，没有 oldest age、retry、provider failure 和其他目标任务 |
+| Worker | `worker_heartbeats` 保存 provider、版本、运行摘要、lastSeenAt | `VERIFIED_CURRENT`；单个 recognition-cleanup worker，2 分钟过期会使 readiness 降级 |
+| 健康检查 | liveness 只看进程；readiness 检查 PostgreSQL、私有对象存储、worker heartbeat 和识别队列 | `VERIFIED_CURRENT`；不等于真实 provider 调用或生产业务成功 |
+| 结构化日志 | API/Worker 使用 JSON slog，API 带 server-generated requestId、method、原始 path、duration | `VERIFIED_CURRENT`；HTTP 日志缺 status/route template，原始 path 可能携带资源 ID |
+| 限流 | API 总请求与 auth 使用每 IP、每分钟内存 bucket | `VERIFIED_CURRENT`；多实例不共享、重启清空、没有专用拒绝指标或告警 |
+| 识别评测 | CLI 计算字段准确率、修正率、未识别、假高置信、provider failure、P50/P95 延迟 | `VERIFIED_CURRENT`；30–50 张真实授权图片门禁尚未完成，small fixture 不能代替 |
+| 邀请后台 | Admin 可创建通用/邮箱定向邀请、查看最近 200 条、撤销；secret 只返回一次 | `VERIFIED_CURRENT`；无任务台、指标台、操作审计 UI，邮箱默认完整显示 |
+| 生产暴露 | production Caddy 对公网 `/metrics` 返回 404，可从后端内网采集 | `VERIFIED_CURRENT`；尚无真实监控平台、告警接收方和生产值班证据 |
+| 产品事件 | 没有持久事件表、事件 schema registry 或指标快照 | 尚未实现；不能从当前 HTTP 请求数推导产品漏斗 |
+
+当前底座适合证明“服务有基本运行信号”，不适合回答留存、激活、跨模块一致性和真实生产事故响应。
+
+### 17.3 四类信号及权威边界
+
+| 信号面 | 权威输入 | 典型用途 | 不得包含/替代 |
+| --- | --- | --- | --- |
+| 业务事实与 DomainChange | 核心事务、不可变版本、账本、Outbox | 产品结果指标、事实对账、漏斗终点 | UI 点击猜测、模型文本 |
+| 产品分析事件 | 服务端事实摘要 + 最小客户端交互事件 | 入口/漏斗、页面采用、用户路径 | 认证秘密、正文、原始标签、医学推断 |
+| 工程 telemetry | metrics、logs、traces、health | 延迟、错误、容量、依赖、排障 | 产品事实、用户画像、长期用户级行为库 |
+| 运营审计 | 邀请、任务操作、发布、配置/配额变化 | 谁在何时做了什么管理动作 | 用户业务内容、后台直接改用户事实 |
+
+事实提交成功是产品结果事件的权威触发点。例如 `intake.committed` 必须由服务端在事务提交后产生；客户端按钮点击只能形成 `intake.submit_attempted`，不能被计作记录成功。
+
+### 17.4 最小测量架构
+
+```mermaid
+flowchart LR
+  UI[H5 最小交互事件] --> API[Event Ingest API]
+  CORE[核心事务 + DomainChange] --> AO[Analytics Outbox]
+  API --> AO
+  AO --> EC[事件消费者与 schema 校验]
+  EC --> AE[(AnalyticsEvent 分区)]
+  AE --> MR[Metric Revision 计算]
+  CORE --> MR
+  MR --> MS[(MetricSnapshot)]
+  MS --> PD[产品仪表盘]
+
+  API2[API/Worker] --> MET[低基数 Metrics]
+  API2 --> LOG[去内容化 Logs]
+  API2 --> TRACE[抽样 Traces]
+  MET --> OD[运行仪表盘/告警]
+  LOG --> OD
+  TRACE --> OD
+
+  ADMIN[运营控制台] --> CMD[受控运营命令]
+  CMD --> AUDIT[(OperatorAudit)]
+  CMD --> AO
+```
+
+R1/R2 不引入第三方前端分析 SDK。目标实现优先使用 PostgreSQL 分区事件表、Outbox 消费者和聚合快照；当量级证明需要独立仓库时再迁移，迁移不得改变 metricVersion 或把历史重新定义。分析系统不可用时，核心业务继续提交，事件留在 outbox 追赶。
+
+### 17.5 测量身份、环境与排除分层
+
+每个工作区维护不可由客户端修改的 `analyticsCohort`：
+
+| cohort | 用途 | 是否进入正式产品指标 |
+| --- | --- | --- |
+| `real` | 正式真实用户 | 是 |
+| `pilot` | 已明确同意的受控真实试用 | 是，但单列并可与 real 合并展示 |
+| `demo` | 匿名演示身份和预置数据 | 否 |
+| `internal` | 团队自用、运营、演示、截图 | 否 |
+| `test` | 自动化、seed、合成数据 | 否 |
+
+环境必须是 production/staging/development/test 中的显式值。只有 production 的 real/pilot 工作区进入正式 M1–M10；staging、Demo、管理员自测、自动化、seed、Fake provider 和 `allow-small` 评测都不得混入。
+
+分析系统不保存原始 userId/workspaceId，而使用带 keyVersion 的 HMAC 假名 `analyticsSubjectId`。业务时区快照、analytics week calendar version 和 cohort 在事件发生时固化；历史事件不因用户改时区或后台改 cohort 而重分桶。认证 session token、IP、邮箱、邀请 secret 与 analyticsSubjectId 不得互相转换或进入同一前端存储。
+
+管理员角色本身不是排除条件；是否属于 internal 必须由受控 cohort 字段决定，避免误删真实使用产品的管理员数据。
+
+### 17.6 统一事件信封
+
+| 字段 | 必填 | 规则 |
+| --- | --- | --- |
+| eventId | 是 | UUID；服务端或已授权客户端生成，消费端唯一去重 |
+| eventName | 是 | `domain.object.action` 小写稳定名，不带动态 ID |
+| schemaVersion | 是 | 正整数；语义/字段不兼容时升级并双写验证 |
+| metricContractVersion | 是 | 指向当时指标定义，防止仪表盘静默改公式 |
+| source | 是 | server/client/worker/reconciliation/admin |
+| collectionClass | 是 | necessary_business / necessary_security / optional_product |
+| environment/releaseVersion | 是 | 环境与可回溯发布版本 |
+| occurredAt/ingestedAt | 是 | 服务端 instant；客户端时间只另存 clientOccurredAt 并标 clockSkew |
+| localDate/weekBucket/timezone | 按需 | 从工作区版本在服务端计算，不信任浏览器日期 |
+| analyticsSubjectId/keyVersion | 真实用户事件 | HMAC 假名；Demo/test 仍有隔离假名但被排除 |
+| cohort/actorKind | 是 | real/pilot/demo/internal/test；registered/demo/admin_operator/worker |
+| requestId | 服务端事件 | 用于短期排障，不用于长期用户画像 |
+| clientActionIdHash | 写命令事件 | 关联 attempted/committed/deduplicated，不保存原始业务 payload |
+| objectType/objectIdHash | 按需 | 只在去重/漏斗必要时保存 HMAC；禁止产品名或正文 |
+| outcome/reasonCode | 按需 | allowlist 枚举；错误详情不进入 properties |
+| properties | 可选 | schema allowlist；未知字段拒绝或隔离，不能任意 JSON 透传 |
+
+事件正文禁止包含：邮箱、IP 明文、session/cookie/token、邀请 secret、产品名/品牌、成分原文、剂量原值、金额、文件名/图片/OCR、笔记/搜索词、AI 问题/回复、健康字段、自由文本错误和第三方完整响应。
+
+### 17.7 收集等级与用户控制
+
+| 等级 | 示例 | 用户关闭后的处理 |
+| --- | --- | --- |
+| necessary_business | ProductConfirmed、IntakeCommitted、BatchAdjusted 的最小事实摘要 | 核心业务继续产生 DomainChange；仅做服务提供、对账和汇总所需处理 |
+| necessary_security | 登录失败、越权拒绝、rate limit、运营操作审计 | 不能作为产品增长分析；按安全目的和保留期处理 |
+| optional_product | 页面曝光、展开来源、点击引用、开始但未提交的漏斗步骤 | 用户关闭后不再发送；关闭不影响任何功能 |
+
+默认 `analyticsMode=minimal`：只使用服务端必要事实和必要运行信号，不发送可选客户端事件。只有完成隐私说明并由用户选择后才启用 optional_product。关闭后不删除核心业务事实，但停止新客户端事件并按生命周期处理已有可选事件。
+
+不使用跨站 cookie、广告标识、设备指纹或第三方再营销。User-Agent 只在请求边缘短期用于兼容/安全排障，产品分析仅保留粗粒度 deviceClass、browserFamily 和 appVersion，且不允许组合成指纹。
+
+### 17.8 写入时机、去重与迟到事件
+
+```mermaid
+sequenceDiagram
+  participant UI as H5
+  participant API as Go API
+  participant DB as Core DB
+  participant OUT as Analytics Outbox
+  participant C as Consumer
+
+  UI->>API: 可选 submit_attempted + eventId
+  UI->>API: 业务命令 + ClientActionId
+  API->>DB: 核心事实 + DomainChange + analytics summary
+  DB->>OUT: 同事务写 committed event
+  DB-->>API: commit
+  API-->>UI: 事实结果
+  OUT->>C: 至少一次投递
+  C->>C: eventId/clientAction 去重 + schema 校验
+  C->>DB: AnalyticsEvent / Metric dirty range
+```
+
+- 核心成功事件必须与业务事务同提交到 outbox，不能在 HTTP 返回后 best-effort 发送。
+- 客户端曝光/点击事件是 best-effort；失败不得阻塞业务，也不得持久保存敏感离线队列。
+- 客户端事件入口只接受有效会话、已登记 eventName/schemaVersion 和 allowlist properties；subject、cohort、environment、release 与服务端时间由服务端补齐。单批数量、单事件大小、时间偏差和频率均有限制，非法事件丢弃并记安全计数。
+- 事件投递为 at-least-once，消费端以 eventId 去重；同一 ClientAction 的 attempted、committed、deduplicated 是不同 actionStage，不重复计核心结果。
+- result_unknown 恢复后只在确定结果时产生 committed/failed 终态；不能因客户端重试重复计数。
+- 迟到补录按 occurredAt 进入业务日期，但“何时形成管理动作”同时保留 recordedAt；周指标按各自合同选择，不能混用。
+- 修正/撤销不物理删除旧事件，追加 reversal/supersede 关系；需要当前有效事实的指标从事实表或有效状态重算。
+- 事件消费者失败不回滚业务；outbox oldest age 和 dead-letter 必须告警。
+
+### 17.9 命名、版本和事件变更纪律
+
+事件命名采用 `domain.object.action`，例如 `capture.product.confirmed`、`intake.record.committed`。动作使用过去式表示已发生事实，`viewed/opened/attempted` 表示交互，不允许含糊的 `success` 或通用 `click`。
+
+变更规则：
+
+1. 新增可选字段且旧消费者可忽略时不升级 schemaVersion。
+2. 改变字段含义、枚举、触发点、分母资格或去重键时必须升级 schemaVersion/metricContractVersion。
+3. 新旧版本至少双算一个完整指标窗口并报告差异，不能直接覆盖历史。
+4. MetricDefinition 保存 owner、公式、来源、排除项、timezone、revision、effectiveFrom 和变更理由。
+5. 仪表盘必须显示 metricVersion、数据更新时间、样本量、完整度和是否包含迟到重算。
+
+### 17.10 身份、邀请与建档事件字典
+
+| 事件 | 来源 | 精确触发 | 允许属性 | 用途 |
+| --- | --- | --- | --- | --- |
+| `identity.demo.started` | server | 新 Demo workspace 提交后 | entrySurface | Demo 流量，仅运营容量，不进产品 KPI |
+| `identity.account.registered` | server | 新注册 User/Workspace 与邀请核销提交后 | invitationKind、cohort | 注册漏斗；不含邮箱/secret |
+| `identity.session.login_succeeded` | server | 注册会话创建后 | authMethod、freshSession | 登录健康；不计留存动作 |
+| `identity.session.login_failed` | security | 认证失败后 | safeReasonCode、rateLimited | 安全/邮件运营；不做用户画像 |
+| `operation.invitation.created` | admin audit | 邀请提交后 | kind、maxUsesBucket、expiryBucket | 邀请供给与审计 |
+| `operation.invitation.revoked` | admin audit | 撤销提交后 | kind、priorState、reasonCode | 邀请审计 |
+| `operation.invitation.accepted` | server | acceptance 原子提交后 | kind、ageBucket | 邀请转化；不含邮箱 |
+| `capture.draft.started` | server | 注册工作区首次创建活动 draft | entrySurface、hasExistingProduct | M1 分母/建档漏斗 |
+| `capture.slot.uploaded` | server | FileObject + current SlotVersion 提交后 | role、source(camera/album)、mimeFamily、sizeBucket | 三槽完成度；不含文件名 |
+| `capture.recognition.finished` | worker | 槽位 job 终态持久化后 | role、status、providerMode(fake/live)、attemptCount、latencyBucket、hasCandidate | 识别运行与手工兜底分层 |
+| `capture.confirmation.summary_saved` | server | 确认事务写 Product 时 | candidateUnchangedCount、candidateEditedCount、manualCount、unknownCount、ingredientCountBucket | M3；不逐字段发送值 |
+| `capture.product.confirmed` | server/domain | 完整确认事务提交后 | ingredientState、planActive、openingBatchPresent、recognitionPath | M1/M3/M4 终点 |
+| `capture.draft.abandoned` | reconciliation | 用户放弃或 7 天清理确定后 | lastCompletedStep、slotCount、failureSeen | 建档退出原因；不以关页猜测 |
+
+邮箱定向邀请在运营表中可为履行邀请目的保存 emailNormalized；分析事件只保留 invitationIdHash/kind。邀请 secret 永不进入任何事件、日志、trace 或截图字段。
+
+### 17.11 产品、计划、执行、库存与风险事件字典
+
+| 事件 | 来源 | 精确触发 | 允许属性 | 用途 |
+| --- | --- | --- | --- | --- |
+| `product.catalog.archived` / `restored` | server/domain | catalogState 事务提交后 | priorState、planState | 管理动作、恢复行为 |
+| `product.deletion.requested` / `completed` | server/worker | deleting 受理 / 清理完成 | objectCountBucket、durationBucket、outcome | 数据控制与清理 SLO |
+| `plan.schedule.version_activated` | server/domain | 新 ScheduleVersion 生效提交后 | planTypeFlags、doseSlotCountBucket、effectiveMode | 有效管理动作、计划采用 |
+| `plan.state.changed` | server/domain | pause/resume interval 提交后 | from、to、reasonCode | 有效管理动作、提醒收敛 |
+| `today.surface.viewed` | client optional | 今日/指定日期主内容实际渲染 | dateRelation(today/past/future)、itemCountBucket、projectionState | 今日采用；不含日期或产品 ID |
+| `intake.command.received` | server | 唯一 ClientAction 通过认证/schema 后 | source、occurrenceLinked、quantityRelation(full/partial/over) | 提交分母；不代表成功 |
+| `intake.record.committed` | server/domain | Intake/Allocation/InventoryEvent/CostSnapshot 提交后 | source、batchCountBucket、occurrenceStateAfter、projectionState | 主指标、M2/M5/M6 |
+| `intake.command.deduplicated` | server | 同 key 同 payload 返回既有结果 | source、originalOutcome | 幂等健康，不重复计 committed |
+| `intake.command.failed` | server | 核心事务确定失败 | safeReasonCode、source | 失败恢复；库存不足单列 |
+| `intake.record.revoked` / `superseded` | server/domain | 补偿/更正事务提交后 | source、batchCountBucket、projectionState | 有效管理动作、M6 |
+| `inventory.batch.added` | server/domain | opening/restock batch 与事件提交后 | source、hasExpiry、costCompleteness | 主指标动作、补货采用 |
+| `inventory.batch.adjusted` / `voided` | server/domain | 调整/作废事件提交后 | reasonCode、direction | 主指标动作、修正健康 |
+| `risk.episode.available` | projection | 新 low/near_expiry/unfinishable episode 激活 | riskType、severity、projectionRevision | M8 分母来源 |
+| `risk.episode.opened` | client optional + server validation | 用户从提醒/产品进入风险详情 | riskType、entrySurface | M8 的“打开风险”口径 |
+| `risk.episode.acted` | server/domain | 补货、盘点/作废、计划调整或明确知道了 | riskType、actionType、daysSinceOpenBucket | M8 分子 |
+| `risk.episode.resolved` | projection | 来源事实不再命中风险 | riskType、resolutionType、durationBucket | 风险闭环与状态延迟 |
+
+“用户没有记录”不能产生 `not_taken` 事件；系统只拥有 missed/无有效 intake 的派生事实，不能推断现实服用行为。
+
+### 17.12 成分、提醒、笔记、AI 与数据控制事件字典
+
+| 事件 | 来源 | 精确触发 | 允许属性 | 用途 |
+| --- | --- | --- | --- | --- |
+| `ingredient.day.viewed` | client optional | 日详情成功渲染 | completenessStatus、sourceCountBucket、projectionState | M9 |
+| `ingredient.sources.expanded` | client optional | 用户展开来源明细 | completenessStatus、sourceCountBucket | M9；不含成分名/剂量 |
+| `ingredient.manual_intake.committed` | server/domain | 手工成分事实事务提交 | itemCountBucket、completenessStatus | 有效管理动作分层 |
+| `cost.ledger.viewed` | client optional | 成本账本成功渲染 | rangeBucket、costCompleteness、projectionState | R2 采用；不含金额 |
+| `reminder.preference.saved` | server/domain | PreferenceVersion 提交 | enabledCategoryCount、quietHoursEnabled | 配置完成率 |
+| `reminder.event.available` | projection | 站内 event 激活 | eventType、sourceType、severity | 提醒查看/行动分母 |
+| `reminder.event.read` / `dismissed` | server/domain | readAt/dismissedAt 提交 | eventType、ageBucket | 查看率与噪音 |
+| `reminder.event.resolved` | projection | 来源事实收敛后 | eventType、resolutionType、latencyBucket | 提醒行动与状态延迟 |
+| `note.version.committed` | server/domain | 用户确认保存 NoteVersion | source(manual/ai_draft)、relationTypeCount | 笔记采用/M10 |
+| `note.search.executed` | client optional | 服务端返回搜索结果 | resultCountBucket、filterFlags | 搜索采用；搜索词禁止上报 |
+| `ai.preflight.decided` | server/security | policy gate 终态 | decision、policyCode、contextCategoryCount、providerPlanned | 拒答/预算；不含问题 |
+| `ai.run.completed` | server/worker | run 终态 | status、providerId、modelId、usageBucket、costBucket、citationCountBucket | M10/质量/成本；Fake 单列排除 |
+| `ai.citation.opened` | client optional + server validation | 已登记引用被用户打开 | sourceType、runAgeBucket | M10 与引用采用；不含 URL query |
+| `ai.draft.saved_to_note` | server/domain | 用户确认后创建 NoteVersion | threadAgeBucket、editedBeforeSave | M10；AI 不能直接写 Note |
+| `privacy.export.requested` / `completed` / `downloaded` | server/worker | 各状态持久化 | exportType、scopeBucket、schemaVersion、durationBucket | 数据可携带性 |
+| `privacy.account_deletion.requested` / `completed` | server/worker | pending_deletion / 清理完成 | durationBucket、objectCountBucket、retryCountBucket | Q8 与清理 SLO |
+
+AI 的 prompt、response、Citation 文本、Note 正文、上下文字段和值永远不进入 AnalyticsEvent。usage 必须区分 prompt/completion/cache/provider unit；成本使用 money string 的 bucket 或聚合值，并带 pricingVersion，Token 数不能冒充人民币。
+
+### 17.13 运营与安全审计事件
+
+`OperatorAudit` 与产品 AnalyticsEvent 分表、分权限保存，至少包含：auditId、actorAdminId、capability、action、targetType/opaqueTargetId、reasonCode、requestId、beforeVersion/afterVersion、outcome、occurredAt、releaseVersion。禁止保存 secret、OCR、笔记、AI 正文或健康数据。
+
+必须审计：创建/撤销邀请、查看未掩码邮箱、改变 cohort、人工重试/取消任务、修改 provider/预算配置、发布 ReferenceFact、下载运营导出、触发删除重试、静默/恢复告警、变更仪表盘或 MetricDefinition。
+
+安全事件独立统计：认证失败、验证码/邀请无效、rate limit、上传签名/MIME/大小拒绝、跨租户拒绝、CSRF/Origin 拒绝、provider 输出校验失败、AI 策略拒绝。普通 404 不作为“资源属于他人”的标签，避免通过 telemetry 重新泄露存在性。
+
+### 17.14 指标计算与快照
+
+```mermaid
+flowchart TD
+  A[Core facts / DomainChange] --> C[Metric calculator]
+  B[Validated AnalyticsEvent] --> C
+  D[MetricDefinition + metricVersion] --> C
+  C --> E{范围完整?}
+  E -- 否 --> F[incomplete/late，保留上一 revision]
+  E -- 是 --> G[写 staging MetricRevision]
+  G --> H[事实对账与排除 cohort]
+  H -- 失败 --> F
+  H -- 通过 --> I[原子激活 MetricSnapshot]
+  I --> J[Dashboard: value + numerator + denominator + sample + freshness]
+```
+
+MetricSnapshot 必须保存 metricKey、metricVersion、periodStart/End、timezoneRule、segment、numerator、denominator、value、sampleSize、sourceRevision、calculatedAt、completenessState。百分比不能脱离分子/分母展示；样本少时仍显示计数并标 `directional_only`。
+
+客户端 optional 事件缺失时，依赖它的指标标 partial/unavailable；不能用页面 API 请求数补齐。核心结果指标优先从服务端事实和 DomainChange 重算，以事件作为漏斗连接和交互解释。
+
+补录、撤销、更正、迟到 outbox 会改变历史周的当前解释。相关 MetricSnapshot 必须显示 `asOf` 和 revision；重算以新 revision 追加并保留变更原因，不能静默覆盖或为了“周报已发”永久冻结错误历史。
+
+### 17.15 官方周口径与主指标“有效管理周”
+
+正式 `user-week` 使用 analytics week calendar version 中的 IANA 时区：周一 00:00（含）至下周一 00:00（不含）。这是连续 7 个本地自然日；DST 变化不按固定 168 小时回切历史。工作区时区在周中变化时，业务事实立即使用模块 15 的新时区规则，但分析周历从下一官方周边界启用新版本，避免同一 user-week 被拆成两套时区；历史 weekBucket 不重算。
+
+Eligible user-week：production、cohort=real/pilot、注册工作区，在该周至少有一个由有效 ScheduleVersion + PlanStateInterval 生成的 occurrence。已删除账户仍可保留不可回溯个人的历史聚合，但原始假名事件按删除政策移除/匿名化。
+
+Management action：该周由用户发起并成功提交任一 `intake.record.committed`、`intake.record.revoked/superseded`、`plan.schedule.version_activated`、`plan.state.changed`、`inventory.batch.added/adjusted/voided`、产品资料 correction，或计划外/补录管理动作。页面查看、AI 会话、后台投影、自动提醒、识别 job 和 Worker 清理不算。
+
+公式：
+
+```text
+有效管理用户周数 = count(distinct analyticsSubjectId, weekBucket)
+  where eligible = true and exists(valid management action)
+
+有效管理周占比 = 有效管理用户周数 / eligible user-week 数
+```
+
+同一周动作再多只计一个有效管理 user-week；同时分层展示 actionType 组合，避免通过制造低价值动作抬高主指标。
+
+### 17.16 M1–M10 计算合同
+
+| 指标 | 分母 | 分子与窗口 | 排除/分层 |
+| --- | --- | --- | --- |
+| M1 建档激活率 | 首次 `capture.draft.started` 的注册 real/pilot 工作区 | startedAt 后 24 小时内确认 Product，且 confirmation summary 显示成分≥1或明确 no_structured_ingredient、有 active plan、有数量>0 opening batch | 每工作区只进入一次；按识别/手工路径、语言、三槽完成度分层 |
+| M2 首次执行激活率 | 首次有效计划生成首个 occurrence 的工作区 | occurrence 关联的 active scheduled/backfill intake，且 recordedAt 不晚于该 occurrence 本地日结束后 48 小时 | ad_hoc 不算；库存不足仍留分母并单列阻塞 |
+| M3 识别辅助完成率 | 上传至少一槽、至少一个 live candidate 可用并最终确认产品的流程 | confirmation summary 的 candidateUnchangedCount ≥1 | Fake、只有手工、无候选流程排除；按 role/语言分层 |
+| M4 手工兜底完成率 | 任一槽出现 failed/partial/timeout/unrecognized 的建档流程 | 在 draft 7 天生命周期内通过手工/混合输入确认产品 | 按失败槽位和 reasonCode 分层 |
+| M5 计划周记录覆盖率 | eligible user-week 内全部计划 occurrence | 截至报告冻结时间，存在至少一条 active 计划关联 intake 的 occurrence | partial/completed/exceeded 分开；无库存仍在分母；不得称医学依从性 |
+| M6 修正成功率 | 服务端收到的唯一 revoke、supersede、backfill、产品/计划 correction ClientAction | 核心事务成功，且影响的必需投影在该版本配置的 projectionSLO 内 fresh | 核心成功/投影超时分别报告；幂等重放不重复计 |
+| M7 4 周持续管理率 | 完成 M1 且随后完成 M2 的闭环激活工作区 | 以 closedLoopActivatedAt 为起点，第 4 个相对 7 日窗口 `[D+21,D+28)` 形成有效管理窗口 | 同时报告前 1–4 窗口序列与样本流失 |
+| M8 风险行动率 | 用户有效打开的 low/near_expiry/unfinishable risk episode | openedAt 后 7 个工作区本地自然日内补货、计划调整、盘点/作废或明确知道了 | episode 去重；自动 resolved 无用户动作不算分子并单列 |
+| M9 成分理解使用率 | 形成有效管理周的工作区 | 该周结束后 28 日内查看成分日详情、展开来源或完成成分导出 | optional 关闭时标 unavailable，不用 HTTP 请求补算 |
+| M10 AI 有效沉淀率 | 至少一个真实 provider succeeded run 的 thread | 首个 succeeded run 后 7 日内打开登记引用或确认保存 AI 草稿/相关手工笔记 | Fake、refused、blocked_output、failed 不进分母；引用与笔记分别报告 |
+
+M2 的 48 小时是激活测量窗口，不限制模块 9 的历史补录能力；超过窗口的有效补录仍是业务事实，只不计“首次执行激活”。M8 沿用模块 13 已确认的 7 个本地自然日行动窗口。
+
+### 17.17 功能域辅助指标
+
+| 领域 | 必须报告 | 解释限制 |
+| --- | --- | --- |
+| 建档 | 各步骤流程数、draft→upload→candidate→confirm 转化、耗时 P50/P95、abandon step | 不以 recognition succeeded 代替产品确认 |
+| 识别 | 字段准确/修正/未识别/假高置信/provider failure、P50/P95；按 role/语言/质量分层 | 只来自授权 Gold Set/评测，不把用户原图放入分析库 |
+| 今日/记录 | 一键记录成功、无库存阻塞、幂等重放、补录、ad_hoc、撤销/更正、端到端耗时 | 未记录不等于未服用 |
+| 库存/成本 | 风险 episode、行动、解决时长、账本对账；成本完整度和账本查看 | 不采集原始金额到产品事件 |
+| 成分 | complete/partial/unknown 分布、日详情/来源/导出、单位不兼容 | partial 不能并入 complete |
+| 提醒 | 配置、available→read、行动、噪音、重复事件、状态延迟 P50/P95 | 站内 available 不是外部 delivered |
+| 笔记 | 创建/编辑/搜索采用、manual/ai_draft 来源 | 不采集正文/搜索词 |
+| AI | 采用、有效回答、拒答准确、引用覆盖、数字一致、沉淀、上下文最小化、成本、失败分类 | 真实/Fake 分开；拒答不是技术失败 |
+| 数据控制 | 导出完成/下载、删除完成时长、重试、残留核对 | “已受理”不等于“已删除” |
+
+每个功能指标都必须链接到其 MetricDefinition；PRD 其他模块中的同名指标以本模块计算合同和对应功能模块业务语义共同解释，不能由仪表盘作者自行简化。
+
+### 17.18 Q1–Q9 正确性与安全门槛的测量
+
+| 门槛 | 自动核对来源 | 违规处理 |
+| --- | --- | --- |
+| Q1 库存账本可重放 100% | 定时按 InventoryEvent 回放与 batch balance 对账 | 任一不一致 P0、冻结相关写入/发布并保全证据 |
+| Q2 精确撤销 100% | allocation 原批次补偿、余额上限与集成回归 | 任一失败阻断发布；线上事件 P0 |
+| Q3 重复副作用为 0 | ClientAction/requestHash、事实唯一键、重复扣减对账 | 任一重复 P0；不能仅去重事件掩盖业务重复 |
+| Q4 跨租户事件为 0 | 权限测试、跨租户拒绝审计、文件/导出/任务探针 | 任一确认事件 P0 安全事故 |
+| Q5 未确认候选入事实为 0 | Product source version 与 confirmation transaction 对账 | 任一违规 P0、停识别确认入口 |
+| Q6 AI 核心写入为 0 | tool allowlist、领域写审计、测试探针 | 任一可达/发生均阻断 AI 发布 |
+| Q7 AI 越界裁决为 0 | 版本化 Gold Set，按风险类别报告样本 | 任一失败关闭对应能力，不用总平均稀释 |
+| Q8 删除后残留为 0 | DB rows、对象清单、授权读取探针、cleanup audit | completion 前不得标 completed；确认残留 P0 |
+| Q9 不兼容单位静默相加为 0 | aggregate contribution/单位矩阵对账 | 任一违规阻断成分聚合发布 |
+
+这些门槛从测试和事实对账获得，不从用户行为埋点推断。测试结果必须携带 release、fixture/真实数据类型和环境；Synthetic/Fake 通过不能关闭真实 provider 或生产门禁。
+
+### 17.19 基线、目标与报告治理
+
+产品效果指标满足以下条件前保持 `UNMEASURED`：
+
+1. 至少连续 14 日事件 schema、去重、时区和事实对账无阻断缺口。
+2. 至少覆盖 4 个完整官方周，并有不少于 30 个 eligible real/pilot user-week；不足时只做描述性报告，不声称趋势稳定。
+3. 仪表盘能同时显示 Demo/internal/test 排除前后差异，正式值中排除数为可审计结果。
+4. 服务端核心事件与事实表按抽样/全量规则对账；关键 committed 事件完整率为 100%。
+5. 指标定义、owner、metricVersion 和刷新延迟已冻结。
+
+30 user-week 是进入目标讨论的最低方向性门槛，不代表统计显著性。设定目标时必须报告分布、置信区间或适合小样本的不确定性、绝对计数和 cohort；不能只给环比百分比。
+
+目标变更需要 PRD/MetricDefinition 变更记录。为了抬高指标而缩小分母、隐藏库存不足、把 Demo 混入、减少可编辑字段或强推提醒均视为指标污染。
+
+### 17.20 运营控制台信息架构
+
+| 页面 | 可见内容 | 可执行动作 | 明确禁止 |
+| --- | --- | --- | --- |
+| 邀请管理 | 类型、掩码邮箱、次数、状态、创建/到期/接受时间 | 创建、复制一次性 secret、撤销 | 查看登录码、密码、用户业务内容 |
+| 系统总览 | release、readiness、SLO、队列/清理/预算/告警摘要 | 跳转 runbook、确认/静默告警 | 直接编辑数据库或用户事实 |
+| 任务监控 | jobType/status/age/attempt/provider/errorCode/sourceVersion、opaque IDs | 对允许任务重试/取消，必须填 reason | 查看图片、OCR、prompt、笔记、健康字段 |
+| Provider 与预算 | provider/model allowlist、运行状态、usage、估算/账单成本、预算 | 启停能力、调整已授权预算、测试配置 | 查看密钥、把 Fake 标 live、无审计切换 provider |
+| 识别/AI 评测 | dataset version、样本数、分层结果、门禁状态 | 上传/引用已授权结果、批准/拒绝发布 | 浏览私有原图作为普通后台功能 |
+| 删除与导出运营 | backlog、oldest age、阶段、重试、残留核对 | 重试清理、失效 artifact | 下载用户导出内容、取消已受理永久删除 |
+| 指标字典 | metricVersion、公式、样本、完整度、owner | 提交版本化变更 | 在 UI 直接改历史公式 |
+| 操作审计 | admin、capability、动作、target、reason、结果、requestId | 筛选/受控导出 | 修改或删除审计记录 |
+
+运营控制台可以使用独立宽屏布局，但必须共享服务端会话、CSRF/Origin、防枚举、错误码和审计合同。它不是“万能管理员后台”。
+
+当前粗粒度 `role=admin` 在目标运营动作前必须由 capability gate 收窄，至少拆为 `invitation.manage`、`operations.read`、`job.retry`、`provider.manage`、`metric.manage`、`audit.read` 和 `invitation.pii_reveal`。默认 admin 只有邀请管理与只读运行摘要；任何重试、配置、PII reveal 或审计导出都要显式授权。
+
+### 17.21 邀请运营规则
+
+当前创建/查看/撤销链继续保留，并补齐：
+
+- 邀请状态统一为 active/accepted/exhausted/expired/revoked；状态由事实派生，不允许手工改 useCount。
+- generic code 的 maxUses 仍在 1–1000 范围内；email-bound 固定 1 次。
+- secret 只在创建响应显示一次，列表、日志、审计和导出永不返回。
+- 邮箱默认掩码显示；查看完整邮箱需要 `invitation.pii_reveal` capability、填写 reason 并写 OperatorAudit。
+- 创建、接受、失败、撤销和过期分开统计；认证失败不能泄露是否存在有效邀请。
+- 邀请转化以原子 InvitationAcceptance 为准，不用注册链接点击或验证码请求代替。
+- 管理员不能替用户注册、登录或查看其工作区；邀请只是准入凭证。
+- 自动邀请邮件链接仍未实现，不在后台展示假开关；当前由管理员安全传递一次性 secret。
+
+### 17.22 任务运营与人工动作边界
+
+| 任务类型 | 可查看 | 允许运营动作 | 不允许 |
+| --- | --- | --- | --- |
+| RecognitionJob | role、状态、age、attempt、provider/model、safe error、slotVersion hash | failed/partial 且可重试时重排；用户仍需确认 | 查看标签/OCR、人工确认产品、换源后静默覆盖 |
+| ProjectionJob | projectionType、sourceRevision、lag、状态 | 幂等重算、从 cursor 恢复 | 手填结果或激活不完整 revision |
+| Reminder materialization | policyVersion、sourceRevision、范围、状态 | 重建 future events | 伪造 delivered、重放过期提醒洪水 |
+| ExportJob | scope type、schemaVersion、状态、age | pending/running 可取消；失效 artifact | 下载内容、延长过期而不审计 |
+| CleanupJob | subjectType、phase、object count、attempt、age | retry/resume、核对残留 | 取消账户/产品永久删除、跳过对象直接标完成 |
+| AiRun | provider/model、策略/运行状态、usage/cost 状态 | 停用能力、调查 safe code | 运营重放用户问题、查看 prompt、自动重试产生费用 |
+
+人工重试必须记录原 jobId、sourceVersion、reason、operator、newAttemptId。已有外部调用可能计费或结果未知时，不能自动换 provider 或生成新 idempotency key；AI 只能由用户显式重试。
+
+### 17.23 Provider、用量、成本与配额可观测性
+
+每次识别/AI 外部 attempt 保存 providerId、modelId、stage、started/finished、status、safeErrorCode、usage units、pricingVersion、estimatedMoney/currency、providerRequestIdHash 和 billableStatus。密钥、完整 request/response 不进入监控。
+
+| 指标 | 维度 | 规则 |
+| --- | --- | --- |
+| 调用量/成功/失败 | provider、model、stage、environment、real/fake | Fake 永远单列；拒答不算 provider failure |
+| 延迟 | provider、model、stage、outcome | P50/P95/P99；queue wait 与 provider time 分开 |
+| usage | image/page/token/cache/provider unit | 原始单位分开，不把不同单位相加 |
+| 估算成本 | provider/model/pricingVersion/currency | 由 usage × 当时价格得出，明确 estimated |
+| 账单成本 | provider invoice period/currency | 与估算对账，不能用估算冒充实际账单 |
+| 预算 | workspace/cohort/capability 的日/月次数、usage、money | 80% warning，100% preflight hard block；并发原子计数 |
+| 质量 | datasetVersion、role、language、quality stratum | 只来自授权评测集，不用生产内容暗中建评测集 |
+
+配额与预算计数必须持久化并支持多实例，不能沿用当前内存 IP bucket 的方式。Provider 质量、产品采用和费用分开看；低成本不能抵消假高置信，调用成功也不能证明回答安全。
+
+### 17.24 仪表盘集合
+
+| 仪表盘 | 核心内容 | 默认刷新 |
+| --- | --- | --- |
+| 产品结果 | 有效管理周、M1–M10、漏斗、cohort、样本/完整度 | 每日；运营期可小时级看漏斗但不改周结论 |
+| 信任与正确性 | Q1–Q9、对账失败、幂等、跨租户、删除残留 | 接近实时告警 + 每次发布报告 |
+| 识别/AI 质量与成本 | 真实/Fake、质量门禁、provider/stage、usage、预算、引用/策略 | 5–15 分钟运行信号；评测按 dataset run |
+| 服务与依赖 | RED、DB/object/SMTP/provider、队列、worker、outbox、投影 | 1 分钟级 |
+| 隐私与生命周期 | Demo/草稿/导出/清理 backlog、oldest age、失败与残留 | 5–15 分钟 |
+| 邀请与准入 | 创建/接受/过期/撤销、注册、验证码/邮件失败、abuse | 每日 + 异常告警 |
+
+每张图必须显示环境、release、time range、timezone、metricVersion、lastUpdated、数据完整度和样本数。默认不提供按单个用户钻取；故障调查通过短期 requestId/jobId 和受控审计完成。
+
+### 17.25 Metrics 合同与低基数约束
+
+目标 Prometheus/OpenMetrics 至少覆盖：
+
+- HTTP：requests_total、duration_seconds histogram、in_flight，标签仅 service/routeTemplate/method/statusClass。
+- Worker/jobs：claimed/completed/failed/retried、queue_depth、oldest_age、lease_reclaimed、run_duration，标签仅 jobType/status/safeReason。
+- Outbox/projection：pending、oldest_age、consumer_lag、revision_failed/stale、replay count。
+- Dependencies：DB pool/latency/errors、object storage/SMTP/provider latency/errors、circuit/budget state。
+- Lifecycle：cleanup backlog/oldest age/attempts/residual failures、export backlog/artifact expiry。
+- Security：rate_limited、auth failures、upload rejects、tenant denial、policy refusal，以 allowlist reason 标签。
+- Process：build info、start time、goroutine/memory/CPU 等运行指标。
+
+禁止 label：userId、workspaceId、requestId、clientActionId、productId、jobId、文件名、邮箱、IP、URL/raw path、error message、prompt、模型自由文本。route 使用 `/api/v1/products/{id}` 模板，不能把 UUID 路径制造成高基数时间序列。
+
+当前 `/metrics` 的全局 total/sum 可作为迁移起点，但目标延迟必须使用 histogram，status/route 必须可分层；产品 M1–M10 不直接暴露为带用户 label 的 Prometheus series。
+
+### 17.26 日志与 Trace 合同
+
+API access log 至少包含 timestamp、level、service、environment、release、requestId、traceId、routeTemplate、method、statusCode、durationMs、responseBytesBucket、actorKind、outcome/errorCode；不记录 raw path/query/body/header/cookie。
+
+领域/Worker 日志包含 jobType、opaque jobId、attempt、sourceVersion、provider allowlist ID、state transition 和 safe errorCode。数据库错误保留内部 cause/stack 到受限日志，但返回用户的 message 与日志正文分开，且 SQL 参数不得展开敏感 payload。
+
+Trace 使用 W3C Trace Context 或等价标准，API→DB/object/provider/worker 只传播随机 traceId，不在 baggage 放用户/产品/健康字段。默认对成功请求低比例抽样，对 5xx、慢请求和失败任务提高采样；包含敏感外部调用的 span 只记录 stage、duration、status、usage，不记录 prompt、OCR、URL query 或 response body。
+
+requestId 用于单次请求，traceId 用于跨组件链路，ClientActionId 用于业务幂等，eventId 用于分析去重；四者不能混为一个公开 ID。
+
+### 17.27 Liveness、Readiness、Synthetic 与业务 SLI
+
+| 信号 | 回答的问题 | 依赖 | 禁止解释 |
+| --- | --- | --- | --- |
+| liveness | 进程是否能响应 | 仅进程自身 | 数据库/业务/供应商可用 |
+| readiness | 实例是否应接流量 | DB、对象存储、worker heartbeat、关键队列访问 | 真实识别/AI 已正确 |
+| config preflight | 配置是否满足环境硬要求 | 必需变量、TLS、provider mode、密钥存在性 | 外部依赖当前连通 |
+| synthetic probe | 最小无隐私路径是否端到端可用 | 专用测试租户/合成对象 | 真实标签准确或用户流程成功 |
+| product/business SLI | 真实核心命令是否在目标延迟内正确完成 | API + DB + 领域事务/投影 | 医学效果或现实服用 |
+| provider quality gate | 授权数据上质量是否过线 | 固定 dataset + 真实 provider | 所有开放世界输入都准确 |
+
+readiness 不主动发 billable provider 请求。Provider 连通通过独立低频 synthetic 和真实任务指标观察；synthetic 使用明确测试账户/非私密输入并从产品 KPI 排除。
+
+### 17.28 初始告警与事故响应
+
+以下是初始运行阈值；模块 18 可以基于容量测试收紧，不能无记录放宽：
+
+| 等级 | 条件 | 初始动作 |
+| --- | --- | --- |
+| P0 | 任一确认的跨租户访问、重复核心副作用、账本不一致、删除 completed 后残留、AI 可写核心事实 | 立即关闭受影响能力/写入，保全 evidence，通知负责人并启动事故流程 |
+| P1 | readiness 连续 2 次失败；worker heartbeat >120s；queue oldest >5 分钟；HTTP 5xx ≥5%/5 分钟且≥50 请求；同 endpoint 连续 3 次相同 5xx | 立即通知值班，按 runbook 降级/回滚/恢复 worker |
+| P1 | provider failure >5%/30 分钟且≥20 次真实调用；预算达到 100%；cleanup oldest >2 小时 | 停止新外部调用或阻止相关操作，核心非 AI 功能继续 |
+| P2 | HTTP 5xx ≥2%/15 分钟且≥100 请求；p95 超对应 SLO 15 分钟；queue oldest >2 分钟；outbox/projection lag >5 分钟 | 工作时段响应，检查版本、容量和依赖 |
+| P2 | cleanup oldest >30 分钟、orphan reconciliation 连续 3 次失败、预算达到 80%、rate-limit/认证失败显著高于版本化基线 | 调查并防止演变，必要时收紧入口 |
+
+低流量时百分比门槛可能不触发，因此同时保留“连续相同失败”和绝对错误数规则。每个告警必须有 owner、severity、runbook URL、dashboard、first/last seen、release、dedupe key、自动恢复条件和最长静默时间；告警正文不得含用户内容。
+
+当前仓库没有已连接的真实告警接收方，属于上线门禁。仅有 dashboard 或日志不算告警；必须在生产演练中证明通知到达、确认、升级和恢复闭环。
+
+### 17.29 降级与运营处置原则
+
+```mermaid
+flowchart TD
+  A[告警/用户故障] --> B{核心事实安全?}
+  B -- 否 --> C[阻断相关写入/发布，保全证据]
+  B -- 是 --> D{仅外部/投影失败?}
+  D -- 是 --> E[核心继续，标 stale/failed，停外部调用或后台重放]
+  D -- 否 --> F[按 route/service 回滚或隔离]
+  C --> G[runbook + owner + audit]
+  E --> G
+  F --> G
+  G --> H[恢复验证 + 事后复盘 + 回归样本]
+```
+
+- AI/识别故障优先关闭对应 provider 能力，不能关闭补剂柜、今日、库存和手工输入。
+- 投影故障保留上一完整 revision 并显示 stale/failed，不回滚核心事实。
+- DB 事务安全未知时停止写入，不通过客户端重试放大副作用。
+- 运营人员不能直接 SQL 修用户事实；修复必须使用版本化迁移、受控命令或补偿事件。
+- 回滚后仍要保留产生错误事实的 release、requestId 和 audit，不用删除日志“恢复正常”。
+
+### 17.30 保留、访问与数据删除
+
+| 数据 | 访问角色 | 生命周期原则 |
+| --- | --- | --- |
+| 原始 optional 产品事件 | 产品分析最小角色 | 短于聚合；用户关闭后停止采集，具体 TTL 在模块 18 冻结 |
+| necessary 事实摘要事件 | 指标计算服务/受限分析 | 与对账和争议窗口匹配；尽量从事实重建 |
+| MetricSnapshot | 产品/运营只读 | 可长期保留匿名聚合，必须带 metricVersion/sample |
+| Metrics time series | 运维/值班 | 低基数、按容量滚动，不含用户标识 |
+| Logs/Traces | 受限工程/安全 | 成功短、错误适度延长；到期删除，访问有审计 |
+| OperatorAudit | 安全/合规授权角色 | 追加不可改；具体期限在模块 18 与隐私说明冻结 |
+| 评测结果 | 产品/模型负责人 | 保存 datasetVersion、聚合和门禁；原图留在授权受控库 |
+
+账户删除时移除/不可逆断开 analyticsSubject 映射和仍可回溯个人的原始事件；已经形成、无法回溯个人的聚合快照可以保留。日志/备份中的残留按模块 16/18 的披露窗口轮换，不能为“历史指标稳定”无限保留可识别行为。
+
+运营、产品和工程权限分离；默认任何人都不能同时查看邀请 PII、用户内容、原始日志和指标假名。生产数据导出需用途、字段、期限、审批和 OperatorAudit。
+
+### 17.31 当前实现与目标差距
+
+| 领域 | `VERIFIED_CURRENT` | `APPROVED_TARGET` |
+| --- | --- | --- |
+| 产品埋点 | 无持久产品事件 | schema registry、事实 outbox、optional client events、事件去重与 MetricSnapshot |
+| 指标口径 | PRD 已有 M1–M10/Q1–Q9，但系统未计算 | 本模块固定周、窗口、排除、版本、样本与完整度 |
+| HTTP metrics | 全局 requests/errors/in-flight/duration sum | route/status histogram、依赖/任务/outbox/生命周期和低基数合同 |
+| 日志 | JSON + requestId/method/raw path/duration | routeTemplate/status/trace/release/safe code，禁止 raw path/query/body |
+| Trace | 未见统一链路追踪 | 抽样 API→DB/object/provider/worker，内容去除 |
+| Readiness | DB、storage、worker、queue | 保留；扩展目标任务/consumer，不把 provider 质量混入 readiness |
+| 任务观测 | recognition queue + heartbeat 摘要 | 所有 AsyncJob 的 age/attempt/lag/SLO、受控操作与审计 |
+| 邀请后台 | 创建/列表/撤销、secret 一次显示 | 掩码 PII、转化/失败、capability、reveal audit |
+| 运营后台 | 仅邀请页和 CLI status/config | 系统/任务/provider/删除/指标字典/审计页面，不读用户内容 |
+| 识别评测 | CLI/阈值/机器报告已实现 | 真实授权 dataset、版本化结果、发布门禁与 dashboard |
+| 限流 | 单实例内存 IP bucket | 多实例持久/共享策略、指标、基线与 abuse 告警 |
+| 告警 | 安全文档要求，未连接真实接收方 | 分级告警、owner/runbook/dedupe/escalation、生产演练 |
+| 成本 | 识别 job 有 provider metadata，完整 usage/成本未统一 | attempt usage、pricingVersion、估算/账单分离、预算硬阻断 |
+
+### 17.32 验收标准
+
+- Given 同一 Intake ClientAction 因响应丢失重试三次，When 计算记录成功数，Then `intake.record.committed` 只计一次，deduplicated 单列且库存事实也只有一份。
+- Given 客户端上报按钮点击但业务请求未到服务端，When 统计 intake 成功率，Then 只进入 optional attempted，不进入 committed 分子。
+- Given Analytics consumer 停止 30 分钟，When 核心 intake 提交，Then 业务成功且 outbox 保留；恢复后事件去重追赶，指标 revision 更新。
+- Given Demo、Playwright、seed、Fake recognition 产生完整流程，When 打开正式产品仪表盘，Then 这些事件全部被排除并显示排除计数。
+- Given 管理员真实使用自己的补剂工作区且 cohort=real，When 计算指标，Then 不会只因 role=admin 被排除。
+- Given 工作区时区在周中改变，When 重算历史周，Then 历史 event weekBucket 不变化、当前业务事实使用新时区，而 analytics week calendar 从下一周边界切换。
+- Given 用户在首次 occurrence 本地日结束 3 天后补录，When 计算 M2，Then 业务记录有效但不计首次执行激活分子。
+- Given 识别失败后用户手工完成建档，When 计算 M4，Then 进入分子；若草稿过期未确认，进入分母不进分子。
+- Given 确认页接受两个候选并手改一个字段，When 生成分析事件，Then 只保存计数/provenance，不保存字段值、产品名或 OCR。
+- Given 用户未启用 optional analytics，When 打开今日、成分和引用，Then 不发送 viewed/opened 事件，核心记录与页面功能不受影响，依赖这些事件的指标标 partial/unavailable。
+- Given `risk.episode.opened` 后 7 个本地日内补货，When 计算 M8，Then 计行动；自动风险消失但用户未动作时只计 resolved 不计行动。
+- Given 一个 AI thread 有真实 succeeded run 且 7 日内打开登记引用，When 计算 M10，Then 计入分子；Fake/refused run 不进分母。
+- Given MetricDefinition 改变分母，When 发布新版，Then 升级 metricVersion、双算完整窗口、显示差异，不覆盖旧快照。
+- Given 样本只有 8 个 user-week，When 查看比率，Then 同时显示 8、标 directional_only，不宣称趋势稳定或达标。
+- Given 核心事实对账发现一条 committed 事件缺失，When 刷新仪表盘，Then 关键指标 completeness 非 complete，上一 revision 不被伪装为最新。
+- Given 管理员查看邀请列表，When 无 PII reveal capability，Then 邮箱掩码；查看完整邮箱需 reason 并产生 OperatorAudit。
+- Given 邀请 secret 创建后已离开页面，When 重新列表或查日志，Then secret 永远无法恢复。
+- Given 运营人员查看失败 RecognitionJob，When 打开详情，Then 可见安全状态/版本/attempt，不可见图片、OCR、候选正文或用户产品名。
+- Given 运营人员重试 failed job，When 提交，Then 保存 operator/reason/sourceVersion/newAttempt；不能确认产品或覆盖 current slotVersion。
+- Given AiRun 结果未知且可能计费，When 运营台查看，Then 不提供自动重试/换 provider；只能停能力并让用户显式决定。
+- Given Prometheus 抓取 HTTP 指标，When 检查 label，Then 只包含 route template 等低基数值，不出现 UUID、邮箱、IP、文件名、error message 或 raw path。
+- Given API 返回 500，When 查看日志与 trace，Then 可用 requestId/traceId/release/route/status 定位，正文、cookie、query 和 SQL 参数未记录。
+- Given 公网请求 `/metrics`，When 通过 production edge，Then 返回不可枚举的非公开结果；内部受认证/网络隔离的 collector 仍可抓取。
+- Given worker heartbeat 超过 120 秒，When readiness 与 alert evaluator 运行，Then 实例降级且产生 P1；恢复 heartbeat 后按规则自动恢复并保留事件。
+- Given 真实 provider 30 分钟内 failure >5% 且不少于 20 次，When 告警触发，Then 暂停新外部调用或降级手工路径，不能把 Fake 结果顶替为成功。
+- Given 账本对账、跨租户测试或删除残留任一违规，When 结果产生，Then P0 且发布/相关能力被阻断，不能被平均成功率稀释。
+- Given 预算达到 80%，When 运行新任务，Then 产生 warning；达到 100% 时 preflight hard block，不生成 billable provider run。
+- Given 账户删除完成，When 生命周期清理运行，Then analyticsSubject 映射和可回溯原始事件被删除/匿名化，匿名 MetricSnapshot 保留且不能反查用户。
+- Given 生产没有告警接收方或未完成通知演练，When 评审上线门禁，Then 状态仍为未通过，即使 `/metrics` 和 dashboard 可打开。
+
+### 17.33 本模块确认点
+
+本模块建议冻结以下运营与测量判断：
+
+1. 业务事实、产品分析、工程 telemetry 和运营审计四层分离；指标和日志永远不能成为产品事实源。
+2. 正式产品指标只纳入 production 的 real/pilot 注册工作区，排除 Demo/internal/test/Fake，并保存可审计排除计数。
+3. 核心结果事件由事实事务 + outbox 产生；客户端只提供最小 optional 交互事件，默认 minimal、可关闭且不影响功能。
+4. 主指标采用工作区时区 ISO 周；M1–M10 的分子、分母、窗口、排除和分层按本模块固定，在达到 4 周/30 eligible user-week 前保持 UNMEASURED 或 directional_only。
+5. Admin 只做邀请、运行、任务、预算、删除与指标治理，不读取用户图片、OCR、记录、笔记、AI/健康正文；敏感运营动作全部审计。
+6. `/metrics` 采用 route template 等低基数标签；日志/trace 去除 raw path、query、body、secret 和内容，requestId/traceId/ClientActionId/eventId 各司其职。
+7. Liveness、readiness、synthetic、真实业务 SLI 和 provider 质量门禁分别解释；任何一个健康都不能代替另一个。
+8. P0 不变量违规立即阻断，P1/P2 有 owner、runbook、告警接收与演练；当前只有 metrics/readiness 而无真实告警接收方，仍是上线缺口。
+
+请确认模块 17。确认后，模块 18 将冻结性能、安全、可用性、兼容性、数据迁移、环境配置、测试层级、发布/回滚和生产验收门槛。

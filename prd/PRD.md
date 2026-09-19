@@ -5024,3 +5024,530 @@ R1 不实现离线自动写队列。离线时可以继续查看当前会话已�
 8. 归档保留历史且可恢复；永久删除受理后不可恢复，清理失败保持 deleting/pending_deletion 并重试。
 
 请确认模块 15。确认后，模块 16 将把上述事实、版本、状态与授权合同映射为统一数据模型、数据流、接口、权限矩阵和隐私生命周期。
+
+## 16. 数据模型、数据流、接口、权限与隐私生命周期
+
+### 16.1 模块目标与状态标记
+
+本模块把模块 5–15 的产品合同映射为服务端可实施的逻辑数据模型、数据流、API 边界、授权规则和数据生命周期。它定义“什么对象是事实、何时写入、由谁读取、如何版本化、何时删除”，但不把当前代码中已有的表或接口误写成完整目标。
+
+本模块统一使用以下标记：
+
+| 标记 | 含义 |
+| --- | --- |
+| `VERIFIED_CURRENT` | 已在当前 Uni migration、Go 服务或 OpenAPI 中核对到的能力 |
+| `APPROVED_TARGET` | 模块 5–15 已确认、但仍需实现或迁移的正式目标合同 |
+| `DEFERRED` | 完整产品范围内保留、按 R2–R4 顺序交付，不能伪装为当前能力 |
+| `NOT_IN_SCOPE` | 已明确不做；不得仅因旧 schema 有字段就恢复入口 |
+
+模块 16 中的大写英文对象名是逻辑对象，不强制一对象一张物理表。实现可以在不破坏租户隔离、历史版本、唯一约束、审计链和删除边界的前提下合并物理表；不能为了少建表而覆盖不可变历史或把派生数据混进事实表。
+
+### 16.2 数据权威与存储分工
+
+| 存储/层级 | 权威内容 | 可以重建 | 不得存放或替代 |
+| --- | --- | --- | --- |
+| PostgreSQL 核心事实 | 身份、产品、版本、计划、记录、批次、分配、事件、成本、手工成分、笔记版本、授权 | 否 | 模型生成的猜测、仅前端存在的完成态 |
+| PostgreSQL 外部证据 | 文件元数据、OCR 原文、候选、provider 运行元数据、引用注册表 | 部分可重新运行，但旧版本不能静默覆盖 | 用户已确认事实本身 |
+| PostgreSQL 派生投影 | occurrence、风险、成分/成本聚合、提醒事件、搜索索引状态 | 是 | 唯一业务事实源 |
+| 私有对象存储 | 标签图片、导出文件、必要的 provider 证据对象 | 视原始来源而定 | 可公开访问 URL、会话 cookie、密钥 |
+| 浏览器会话内存 | 页面缓存、未提交草稿、当前筛选 | 是 | 长期私密事实、离线成功账本 |
+| 外部 provider | 当前明确授权的一次输入 | 不作为本产品长期事实库 | 未选择的产品、笔记、健康上下文或跨租户数据 |
+
+PostgreSQL 是全部服务端事实与元数据的单一权威。对象存储只保存二进制；任何对象必须由服务端通过已授权的 `FileObject` 元数据读取，不能仅凭 object key 访问。浏览器本地数据只用于本次交互恢复，清空后不能改变业务事实。
+
+### 16.3 聚合边界与跨域引用
+
+| 聚合 | 聚合根 | 同事务内可写对象 | 跨聚合只允许的引用 |
+| --- | --- | --- | --- |
+| 身份与工作区 | User / Workspace | AuthIdentity、Session、WorkspaceMember、InvitationAcceptance | 其他聚合保存 userId/workspaceId，不复制认证秘密 |
+| 建档草稿 | CaptureDraft | CaptureSlotVersion、RecognitionJob、RecognitionEvidence、候选确认稿 | 确认后只以 sourceCaptureDraftId 关联 Product |
+| 产品资料 | Product | ProductProfileVersion、ProductMediaLink、IngredientProfileVersion/Item | Schedule、Batch、Intake、Note 只引用 productId 与必要版本 |
+| 计划 | ProductPlan | ScheduleVersion、DoseSlot、PlanStateInterval | Occurrence 引用确定的 scheduleVersionId/doseSlotId |
+| 库存与记录 | ProductInventory | InventoryBatch、InventoryEvent、IntakeRecord、IntakeAllocation、CostSnapshot | 聚合/提醒引用事实 revision，不反写原事件 |
+| 成分 | IngredientLedger | IngredientContribution、ManualIngredientIntake/Item、CorrectionVersion | 日/月聚合引用 contribution revision |
+| 提醒 | ReminderPolicy | PreferenceVersion、ProductOverride、ReminderEvent | 只引用来源对象和来源 revision |
+| 笔记 | Note | NoteVersion、NoteRelation | 可以引用产品/成分/AI 来源，不拥有它们 |
+| AI | AiThread | AiMessage、AiRun、AiContextSnapshot、CitationSnapshot、PolicyDecision | 只读授权快照；不能写其他领域聚合 |
+| 平台变更 | ClientAction / DomainChange | 幂等结果、OutboxEvent、consumer cursor | 只保存最小引用和 revision，不复制正文 |
+
+跨聚合不得以 JSON 快照替代正常外键和版本引用。只有为历史解释、导出、成本或外部调用所需的“当时快照”可以冗余，而且必须明确命名为 `...Snapshot` 并记录来源版本。
+
+### 16.4 身份、租户、文件与任务 ER
+
+```mermaid
+erDiagram
+  USER ||--o{ AUTH_IDENTITY : owns
+  USER ||--o{ SESSION : opens
+  USER ||--o{ WORKSPACE_MEMBER : joins
+  WORKSPACE ||--o{ WORKSPACE_MEMBER : contains
+  WORKSPACE ||--o{ SESSION : scopes
+  USER ||--o{ INVITATION_ACCEPTANCE : accepts
+  INVITATION ||--o| INVITATION_ACCEPTANCE : consumed_by
+  WORKSPACE ||--o{ FILE_OBJECT : owns
+  USER ||--o{ FILE_OBJECT : uploads
+  FILE_OBJECT ||--o{ FILE_LINK : referenced_by
+  USER ||--o{ CLEANUP_JOB : subject_of
+  WORKSPACE ||--o{ ASYNC_JOB : scopes
+  ASYNC_JOB ||--o{ JOB_ATTEMPT : records
+  CLIENT_ACTION ||--o| ACTION_RESULT : resolves
+  DOMAIN_CHANGE ||--o{ OUTBOX_DELIVERY : consumed_as
+```
+
+当前 `workspace_members` 已存在，但 R1–R4 仍是单所有者产品；`member` 不代表协作功能已经开放。只有 owner 会进入业务工作区。未来若开放多人协作，必须另做权限、冲突、敏感数据共享和退出工作区评审，不能直接启用现有枚举。
+
+`AsyncJob` 是统一运行信封，不要求所有任务共用一张表。RecognitionJob、ProjectionJob、ExportJob、CleanupJob 和 AiRun 可以分别建表，但必须共享模块 15 的 status、lease、attempt、runAfter、sourceVersion、result/error 和取消规则。
+
+### 16.5 产品、计划、记录、库存与成本 ER
+
+```mermaid
+erDiagram
+  PRODUCT ||--o{ PRODUCT_PROFILE_VERSION : has
+  PRODUCT ||--o{ PRODUCT_MEDIA_LINK : displays
+  FILE_OBJECT ||--o{ PRODUCT_MEDIA_LINK : supplies
+  PRODUCT ||--o{ INGREDIENT_PROFILE_VERSION : labels
+  INGREDIENT_PROFILE_VERSION ||--o{ INGREDIENT_PROFILE_ITEM : contains
+  CANONICAL_INGREDIENT ||--o{ INGREDIENT_PROFILE_ITEM : normalizes
+  PRODUCT ||--|| PRODUCT_PLAN : configures
+  PRODUCT_PLAN ||--o{ SCHEDULE_VERSION : versions
+  SCHEDULE_VERSION ||--o{ DOSE_SLOT : contains
+  PRODUCT_PLAN ||--o{ PLAN_STATE_INTERVAL : pauses
+  SCHEDULE_VERSION ||--o{ SCHEDULED_OCCURRENCE : materializes
+  DOSE_SLOT ||--o{ SCHEDULED_OCCURRENCE : instantiates
+  PRODUCT ||--o{ INVENTORY_BATCH : stocks
+  INVENTORY_BATCH ||--o{ INVENTORY_EVENT : journals
+  PRODUCT ||--o{ INTAKE_RECORD : records
+  INTAKE_RECORD ||--o{ INTAKE_ALLOCATION : allocates
+  INVENTORY_BATCH ||--o{ INTAKE_ALLOCATION : consumed_from
+  INTAKE_ALLOCATION ||--|| ALLOCATION_COST_SNAPSHOT : prices
+  INTAKE_RECORD }o--o| SCHEDULED_OCCURRENCE : fulfills
+```
+
+`ScheduledOccurrence` 是可重建的确定性投影，不是“用户真的吃了”的事实。其稳定键为 workspaceId + productId + scheduleVersionId + localDate + doseSlotId；实际执行只由有效 IntakeRecord 及其关联重算。
+
+批次余额既可以保存为受约束的当前值以提高性能，也必须能由有效 InventoryEvent 回放验证。`currentQuantity` 不能成为没有事件支持的第二本账。
+
+### 16.6 成分、提醒、笔记与 AI ER
+
+```mermaid
+erDiagram
+  CANONICAL_INGREDIENT ||--o{ INGREDIENT_ALIAS : named_as
+  UNIT_DEFINITION ||--o{ UNIT_CONVERSION_VERSION : converts
+  INTAKE_ALLOCATION ||--o{ INGREDIENT_CONTRIBUTION : derives
+  INGREDIENT_PROFILE_VERSION ||--o{ INGREDIENT_CONTRIBUTION : explains
+  MANUAL_INGREDIENT_INTAKE ||--o{ MANUAL_INGREDIENT_ITEM : contains
+  MANUAL_INGREDIENT_ITEM ||--o{ INGREDIENT_CONTRIBUTION : derives
+  INGREDIENT_CONTRIBUTION ||--o{ AGGREGATE_REVISION_ITEM : included_as
+  INGREDIENT_AGGREGATE_REVISION ||--o{ AGGREGATE_REVISION_ITEM : contains
+  REMINDER_PREFERENCE ||--o{ REMINDER_PREFERENCE_VERSION : versions
+  REMINDER_PREFERENCE ||--o{ PRODUCT_REMINDER_OVERRIDE : overrides
+  REMINDER_PREFERENCE_VERSION ||--o{ REMINDER_EVENT : generates
+  PRODUCT ||--o{ NOTE_RELATION : relates
+  NOTE ||--o{ NOTE_VERSION : versions
+  NOTE ||--o{ NOTE_RELATION : links
+  AI_THREAD ||--o{ AI_MESSAGE : contains
+  AI_THREAD ||--o{ AI_RUN : runs
+  AI_RUN ||--|| AI_CONTEXT_SNAPSHOT : authorizes
+  AI_RUN ||--o{ CITATION_SNAPSHOT : cites
+  AI_RUN ||--|| POLICY_DECISION : gated_by
+  REFERENCE_FACT_VERSION ||--o{ CITATION_SNAPSHOT : supports
+  AI_MESSAGE }o--o| NOTE_VERSION : saved_as_draft
+```
+
+成分标准名、别名和单位换算版本是受控参考数据；用户确认的产品配方版本仍须保存原标签名、原数值和原单位。规范化失败时保留原值并把贡献标为 unknown/partial，不能丢弃记录。
+
+AI 保存的 `AiContextSnapshot` 至少记录用户选择的上下文类别、对象与版本、时间范围、接收 provider、政策版本和必要的值摘要。为了数据最小化，默认不永久复制所有业务正文；若为了争议排查保留请求正文，必须加密、限时、单独授权访问并在启用 provider 前披露。
+
+### 16.7 身份、租户和运行对象字典
+
+| 对象 | 类型 | 关键字段/约束 | 生命周期 |
+| --- | --- | --- | --- |
+| User | 核心事实 | kind、account.status、role；email 不直接作为主键 | 注册账户至删除完成；Demo 到期清理 |
+| AuthIdentity | 核心事实 | provider + providerSubject 唯一；secretHash 仅服务端 | 随账户删除；验证材料不进入业务日志 |
+| Workspace | 核心事实 | ownerUserId、kind、IANA timezone、expiresAt | 当前一用户一个有效业务空间；Demo 有明确过期时间 |
+| WorkspaceMember | 核心事实 | workspaceId + userId 唯一；当前仅 owner 生效 | 成员协作未开放 |
+| Session | 安全事实 | tokenDigest、kind、expiresAt、invalidatedAt | cookie 只保存随机 token；服务端只存摘要 |
+| Invitation | 运营事实 | emailNormalized、expiresAt、revokedAt、acceptedAt | 单次原子消费；管理员不能据此读取业务内容 |
+| ClientAction | 幂等事实 | workspaceId + clientActionId 唯一、requestHash、resultRef、state | 保留期必须覆盖所有自动/手动安全重试窗口 |
+| DomainChange | 变更事实 | aggregateType/id/version、eventType、occurredAt、minimalPayload | 与核心事务同提交；不保存敏感正文 |
+| FileObject | 外部证据 | objectKey、mime、size、sha256、status、purpose | 私有；对象删除成功后元数据标 deleted |
+| AsyncJob/JobAttempt | 运行事实 | sourceVersion、status、lease、attempt、provider、errorCode | 按任务保留策略清理；业务事实不依赖其长期存在 |
+| CleanupJob | 删除控制 | subject、phase、cursor、attempt、lastError | 完成后保留最小非内容型结果，供删除状态核对 |
+
+### 16.8 建档、产品与媒体对象字典
+
+| 对象 | 类型 | 写入时机 | 版本/不可变规则 |
+| --- | --- | --- | --- |
+| CaptureDraft | 用户草稿事实 | 进入添加流程时创建 | 草稿有 version；确认后不可再次确认成第二个产品 |
+| CaptureSlotVersion | 外部证据 | 每次上传/替换正面、成分、有效期槽位 | 新版本不覆盖旧任务；只有 currentSlotVersion 可进入确认稿 |
+| RecognitionJob | 异步运行 | 槽位版本上传完成后 | 结果绑定 fileId + slotVersion；迟到结果可 stale，不覆盖当前值 |
+| RecognitionEvidence | 外部证据 | OCR/provider 完成时 | 原文、候选、置信度、模型/provider 版本分离保存 |
+| ConfirmationDraft | 用户草稿事实 | 用户编辑候选时 | 明确区分 providerCandidate 与 userValue |
+| Product | 核心事实 | 建档确认事务 | 只表达 catalogState、稳定 ID 和当前版本指针；仅 supplement |
+| ProductProfileVersion | 不可变事实 | 名称、品牌、单位、每份量等确认/修改时 | 新版本生效；历史 intake 保存必要显示快照 |
+| ProductMediaLink | 关系事实 | 选择封面/证据图片时 | 记录 purpose、fileId、sortOrder、active interval |
+| IngredientProfileVersion | 不可变事实 | 建档确认或配方纠错激活时 | 子项整体版本化；旧记录继续指向 as-recorded 版本 |
+| ProductDeletion | 删除控制 | 永久删除受理时 | Product 先进入 deleting；不能用直接 DELETE 绕过对象清理 |
+
+旧数据库允许 `product_type=prescription` 不构成产品能力。目标 API 和 UI 只接受 `supplement`；迁移需盘点旧值并显式处理，不能开放处方药入口。处方药、个体用药建议和药物相互作用结论均为 `NOT_IN_SCOPE`。
+
+### 16.9 计划、记录、库存与成本对象字典
+
+| 对象 | 类型 | 写入时机 | 核心约束 |
+| --- | --- | --- | --- |
+| ScheduleVersion | 不可变事实 | 新计划或未来变更保存时 | effectiveFrom/effectiveTo 不重叠；保存时固化 timezone |
+| DoseSlot | 版本子项 | 随 ScheduleVersion 原子创建 | 时段、目标量、餐食提示有稳定 slotId |
+| PlanStateInterval | 不可变区间事实 | 暂停、恢复、归档联动时 | active/paused 区间不能重叠；保留 reason |
+| ScheduledOccurrence | 派生投影 | 请求时或提前物化 | 稳定自然键；来源计划版本可追溯 |
+| IntakeRecord | 核心事实 | scheduled/ad_hoc/backfill 记录事务 | active → revoked/superseded；原行不直接改写 |
+| IntakeAllocation | 核心事实 | FEFO 分配时 | 同一 intake 分配量总和等于记录量 |
+| InventoryBatch | 核心事实 | 开箱、补货、迁移时 | 数量与货币固定精度；有效期保留精度类型 |
+| InventoryEvent | 不可变账本 | opening/restock/intake/undo/adjustment/void 时 | delta 与来源对象唯一对应；不能物理改写旧事件 |
+| AllocationCostSnapshot | 不可变快照 | intake 分配事务 | 保存当时 unitCost、currency、costStatus、sourceBatchId |
+| CostEvent/CostRevision | 事实/投影 | 批次成本调整与聚合时 | 更正以新事件/版本表达；不重写已确认历史价格 |
+| InventoryRiskProjection | 派生投影 | 批次、计划、时区或当前日期变化后 | 带 sourceRevisionVector、calculatedAt、state |
+
+服务端数据库数值使用固定精度 numeric；API 中数量、金额、成分剂量统一传十进制字符串，避免 JavaScript 浮点污染。币种用 ISO 4217 代码；R1 UI 只展示 CNY 不等于底层可以省略 currency。
+
+### 16.10 成分、提醒、笔记、AI 与导出对象字典
+
+| 对象 | 类型 | 写入时机 | 核心约束 |
+| --- | --- | --- | --- |
+| CanonicalIngredient / Alias | 受控参考事实 | 审核发布参考数据时 | 版本和适用范围明确；用户原标签值不被覆盖 |
+| UnitConversionVersion | 受控参考事实 | 审核单位换算时 | 仅兼容维度可换算；生效区间可追溯 |
+| IngredientContribution | 派生明细 | intake allocation 或手工成分事件后 | 指向来源记录、配方版本、换算版本与完整度 |
+| ManualIngredientIntake | 核心事实 | 用户保存独立成分记录时 | 不创建产品 intake、库存或成本事件 |
+| IngredientAggregateRevision | 派生投影 | 一组 contribution 完整重算后 | 同一查询范围原子切换，不混合 revision |
+| ReminderPreferenceVersion | 不可变事实 | 保存全局提醒偏好时 | timezone/channel/quietHours 和版本一并保存 |
+| ProductReminderOverride | 核心事实 | 单品覆盖保存时 | 继承或覆盖必须显式，产品删除时一起清理 |
+| ReminderEvent | 派生触达记录 | 确定性物化提醒时 | sourceType/id/revision 唯一，幂等收敛 |
+| Note / NoteVersion | 核心事实 | 用户保存或确认 AI 草稿时 | 正文版本不可变；编辑创建新 NoteVersion |
+| HealthContextGrant | 授权事实 | 用户针对具体 purpose 选择字段时 | 字段、目的、provider、政策版本、有效期逐项记录 |
+| ReferenceFactVersion | 受控参考事实 | 资料审核发布时 | 来源、适用范围、发布日期/撤回状态可追溯 |
+| AiRun | 外部运行事实 | preflight 通过后 | 先保存 PolicyDecision；拒答不发 billable provider 调用 |
+| AiContextSnapshot | 敏感授权快照 | 每次 AiRun | 只含本次选择；不能沿用已撤销或目的不同的 grant |
+| ExportJob / ExportArtifact | 异步任务/私有文件 | 用户请求导出时 | schemaVersion、范围、生成时间、expiresAt、sha256 |
+
+### 16.11 版本类型与当前指针
+
+同一列名 `version` 容易掩盖不同语义，目标模型必须区分：
+
+| 版本类型 | 示例 | 规则 |
+| --- | --- | --- |
+| aggregateVersion | Product、CaptureDraft、Note 当前写并发版本 | 每次核心事实修改 +1，用于 expectedVersion |
+| businessVersion | ScheduleVersion、IngredientProfileVersion、PreferenceVersion | 不可变业务历史，有 effective interval |
+| evidenceVersion | CaptureSlotVersion、ReferenceFactVersion | 表达证据或登记资料变化，不自动改用户事实 |
+| sourceRevisionVector | 风险、成分、成本、提醒投影 | 列出参与计算的各事实 revision/游标 |
+| projectionRevision | 某次完整投影结果 | 计算完成后原子切换为 active |
+| contractVersion | OpenAPI、CSV schema、policy、prompt/tool schema | 用于客户端兼容、导出复现和 AI 审计 |
+
+聚合根可以保存 `current...VersionId` 作为快速指针，但指针和新版本必须同事务切换。删除旧版本或就地更新旧版本均不允许。投影不得把自己的 revision 写回 aggregateVersion，避免异步刷新制造虚假并发冲突。
+
+### 16.12 租户键、对象 ID 与归属约束
+
+1. 所有私有聚合根保存不可猜测 ID、`userId` 与 `workspaceId`；当前单所有者阶段二者都必须参与服务端查询。
+2. 子表可以通过父外键继承租户，但任何跨父查询必须显式 join 回已按 userId/workspaceId 过滤的根；高风险热路径可冗余双租户键并增加一致性约束。
+3. 客户端不能在业务请求中选择 ownerUserId 或 workspaceId。服务端从有效 session 建立 Scope，路径/body 中出现这些字段时拒绝或忽略，不能信任。
+4. 资源属于其他租户与资源不存在返回同类不可枚举结果；日志也不得向普通用户暴露真实归属。
+5. 对象存储 key 使用随机、不可推断路径；下载由已认证 API 授权并返回短时响应/短时签名，禁止永久公共链接。
+6. 所有跨对象关系在数据库验证同 workspace；只校验两个 UUID 都存在不够。
+7. 当前 WorkspaceMember 的 `member` 值是 schema 预留，不授予内容权限。只有 owner 与服务端受控 worker 可访问当前业务数据。
+
+如果未来启用成员协作，需要从“userId + workspaceId 双过滤”迁移为“有效 membership + workspaceId + object ACL”，并为历史 creator/owner 字段保留语义；该迁移不属于本 PRD 当前交付。
+
+### 16.13 三槽建档数据流
+
+```mermaid
+sequenceDiagram
+  participant UI as H5
+  participant API as Go API
+  participant DB as PostgreSQL
+  participant OBJ as Private Object Storage
+  participant W as Worker/Provider
+
+  UI->>API: 创建 CaptureDraft
+  API->>DB: 写 draft + aggregateVersion
+  UI->>API: 上传槽位文件 + ClientActionId
+  API->>API: 校验会话、租户、MIME、大小、内容摘要
+  API->>OBJ: 写入随机 objectKey
+  API->>DB: 写 FileObject + SlotVersion + RecognitionJob
+  W->>DB: 按 lease 领取绑定 slotVersion 的 job
+  W->>OBJ: 读取已授权对象
+  W->>DB: 写 Evidence/Candidate/trace，更新 job
+  UI->>API: 读取 draft 聚合状态并人工修改候选
+  UI->>API: 确认 + expectedVersion + ClientActionId
+  API->>DB: 单事务写 Product/版本/可选批次/证据关系/outbox
+  API-->>UI: 产品 ID、事实版本、projectionState
+```
+
+对象上传成功但数据库事务失败时，对象成为待回收 orphan，清理器按宽限期删除；数据库写成功但响应丢失时，ClientAction 返回原结果。产品确认成功后，识别证据仍是证据，不会因为用户后续修改产品而被反向改写。
+
+### 16.14 记录、库存、成本与成分数据流
+
+```mermaid
+sequenceDiagram
+  participant UI as H5
+  participant API as Go API
+  participant DB as Core Transaction
+  participant O as Outbox
+  participant P as Projection Workers
+
+  UI->>API: 创建 intake + expectedVersion + ClientActionId
+  API->>DB: 锁定产品与可用批次
+  DB->>DB: 校验计划/日期/库存并执行 FEFO
+  DB->>DB: 写 Intake + Allocation + InventoryEvent + CostSnapshot
+  DB->>O: 同事务写 DomainChange
+  DB-->>API: commit + aggregateVersion
+  API-->>UI: 核心成功，投影 refreshing
+  O->>P: 重算 occurrence/风险/成分/成本/提醒
+  P->>DB: 写完整 projectionRevision
+  P->>DB: 原子切换 active revision + delivery cursor
+  UI->>API: 刷新/订阅后读取 fresh revision
+```
+
+如果投影 Worker 失败，核心 intake 和库存扣减继续有效；页面显示核心事实与上一完整 revision/失败状态。若核心事务失败，则 Intake、Allocation、库存、成本、Outbox 全部不存在，不允许投影凭请求日志“补”出记录。
+
+### 16.15 派生、导出与 AI 数据流
+
+派生投影统一遵循：读取 source revision vector → 在 staging revision 中完整计算 → 验证范围完整性 → 原子激活 → 推进 consumer cursor。旧 revision 可按短期排障窗口保留，但页面只读取一个 active revision。
+
+导出统一遵循：用户选择范围 → 服务端授权并固定 schemaVersion/source revisions → ExportJob 生成私有文件 → FileObject 记录 expiresAt → 用户通过授权下载 → 到期对象优先删除。导出文件不是公共分享链接。
+
+AI 调用统一遵循：
+
+```mermaid
+flowchart LR
+  A[用户问题与显式上下文选择] --> B[会话/租户/字段授权]
+  B --> C[安全策略 preflight]
+  C -- 拒绝 --> D[保存 PolicyDecision，不调用 provider]
+  C -- 允许 --> E[读取固定事实版本]
+  E --> F[生成 AiContextSnapshot 与预算检查]
+  F --> G[调用已披露 provider]
+  G --> H[引用解析与输出检查]
+  H -- 通过 --> I[发布带 AI 标识的回复]
+  H -- 失败 --> J[blocked_output，不发布原文]
+  I --> K{用户选择保存为笔记?}
+  K -- 是 --> L[可编辑预览后新建 NoteVersion]
+```
+
+provider 没有数据库、对象存储或工具的直接访问权；它只接收服务端为本次 run 组装的最小上下文。AI 运行不进入 Product、Schedule、Intake、Inventory、Cost 或 Ingredient 核心事务。
+
+### 16.16 API 通用合同
+
+| 项目 | 目标合同 |
+| --- | --- |
+| 基础路径 | `/api/v1`；破坏性契约通过新 major 或显式版本演进 |
+| 身份 | HttpOnly、Secure、SameSite 会话 cookie；浏览器不保存 bearer token |
+| 命名 | JSON camelCase；对象状态使用领域字段名，不返回裸 `status` 让客户端猜测 |
+| 数值 | 数量、剂量、金额使用十进制字符串；币种显式返回 |
+| 时间 | instant 为 RFC 3339 UTC；业务日为 `YYYY-MM-DD`；时间点同时返回 IANA timezone/offset 快照 |
+| 写命令 | `Idempotency-Key` 承载 ClientActionId；body 含业务 payload 和需要时的 `expectedVersion` |
+| 读取版本 | body 返回 aggregateVersion/businessVersion；ETag 可用于缓存，但不替代写命令 expectedVersion |
+| 请求追踪 | 服务端生成或安全接收 `X-Request-ID` 并在响应回传；不得把敏感字段放入 ID |
+| 错误 | 稳定 envelope：code、message、requestId、可选 fieldErrors/retryAfter/currentVersion；不泄露租户存在性 |
+| 分页 | cursor + limit；cursor 不包含可读敏感值，排序稳定 |
+| 异步 | `202 Accepted` 返回 jobId、status、pollAfter；job 终态和业务事实状态分开 |
+| 投影 | 响应明确 projectionState、projectionRevision、sourceRevision、calculatedAt/lastSuccessfulAt |
+| 删除 | 可恢复归档使用领域命令；永久删除返回 deleting/cleanup job，不假装同步完成 |
+| 结果未知 | `GET /actions/{clientActionId}` 查询受理/成功/失败/未知，只能在原租户内读取 |
+| 缓存 | 私有业务响应默认 `Cache-Control: private, no-store`；文件读取同样禁止共享缓存 |
+
+HTTP 语义固定为：200/201 表示核心事实已经提交；202 表示请求已持久受理但异步未完成；204 用于成功且无正文；400 schema/业务格式；401 未认证；403 仅用于可安全披露的角色限制；404 用于不存在或租户隐藏；409 版本/幂等/状态冲突；410 已删除；422 语义校验；429 限流；503 临时依赖不可用。精确 code 由错误注册表冻结，客户端不能只按 message 分支。
+
+### 16.17 当前已验证 API 面
+
+当前 `uni/contracts/openapi.yaml` 只证明以下 launch-beta 面已定义；它不是完整产品 API：
+
+| 领域 | `VERIFIED_CURRENT` 路径 |
+| --- | --- |
+| 健康检查 | `GET /health/live`、`GET /health/ready` |
+| 会话/登录 | `GET /session`、邮箱验证码请求/验证、密码登录、密码重置、`POST /auth/logout` |
+| 账户与邀请 | `DELETE /account`、管理员邀请列表/创建/撤销 |
+| 产品 | `GET/POST /products`、`GET/PUT /products/{productId}`、`POST /products/{productId}/batches` |
+| 今日与记录 | `GET /today`、`GET/POST /intakes`、`DELETE /intakes/{intakeId}` |
+| 识别 | `POST /recognition/sets`、读取 set、重试 job、确认 set |
+| 私有文件 | `GET /files/{fileId}` |
+
+当前 OpenAPI 的 JSON number、单一产品 status、三文件一次性提交和部分当前态更新方式需要迁移到本模块合同。迁移期间不能一边让旧客户端按浮点/单 status 写入，一边让新客户端假设版本化模型已经成立；模块 18 必须给出兼容窗口与数据回填顺序。
+
+### 16.18 完整目标 API 资源面
+
+以下是产品级资源合同，不是要求一次性开发完的路由清单：
+
+| 阶段 | 领域 | 主要资源/命令 | 说明 |
+| --- | --- | --- | --- |
+| R1 | identity | `/session`、`/auth/*`、`/account`、`/actions/{id}` | 延续当前安全会话，补齐结果查询 |
+| R1 | capture | `/capture-drafts`、`/capture-drafts/{id}/slots/{role}`、`/recognition-jobs/{id}`、`/.../confirm` | 槽位独立版本、替换、重试与确认 |
+| R1 | products | `/products`、`/products/{id}`、`/.../archive`、`/.../restore`、`/.../deletion` | catalogState 独立；永久删除为任务 |
+| R1 | plans | `/products/{id}/schedule-versions`、`/.../plan-state`、`/plan/occurrences` | 新版本与暂停区间，不原地覆盖 |
+| R1 | intakes | `/intakes`、`/intakes/{id}/revoke`、`/.../corrections` | 撤销/更正是显式命令，不用 DELETE 表达所有语义 |
+| R1 | inventory | `/products/{id}/batches`、`/inventory-events`、`/.../adjustments`、`/inventory-risks` | 事件账本和风险投影分开 |
+| R1 | reminders | `/reminder-preferences`、`/products/{id}/reminder-override`、`/reminder-events` | 站内事件；外部渠道未开启 |
+| R2 | costs | `/costs/summary`、`/costs/ledger`、批次成本更正命令 | 使用 allocation snapshot 与 revision |
+| R2 | ingredients | `/ingredients/calendar`、`/ingredient-intakes`、`/ingredient-contributions`、纠错命令 | 聚合可展开来源与完整度 |
+| R2 | notes | `/notes`、`/notes/{id}/versions`、搜索/关系 | 手工能力不依赖 AI |
+| R2 | exports | `/exports`、`/exports/{id}`、授权下载 | 产品/记录/成分/笔记按 schemaVersion 导出 |
+| R3 | AI | `/ai/threads`、`/ai/runs`、`/.../cancel`、`/.../save-note-draft` | 先策略和授权，再 provider |
+| R4 | reference/health | reference fact 读取、最小健康上下文/grant | 只随具体低风险功能开放 |
+
+所有集合默认只返回当前 session 的工作区。批量 API 同样逐对象授权；不得因为列表已过滤就跳过 mutation 中每个 ID 的归属校验。
+
+### 16.19 角色与能力矩阵
+
+| 能力 | Demo owner | 注册 owner | Admin operator | Worker service | External provider |
+| --- | --- | --- | --- | --- | --- |
+| 读取自己工作区业务数据 | 允许，受 Demo TTL/配额 | 允许 | 禁止 | 仅任务所需、按 workspace/job scope | 禁止直接读取 |
+| 创建产品、记录、批次、计划 | 允许 R1 Demo 能力 | 允许 | 禁止 | 禁止代替用户发起 | 禁止 |
+| 归档/永久删除产品 | 允许自己数据 | 允许自己数据 | 禁止 | 仅执行已受理清理 | 禁止 |
+| 导出账户/业务数据 | Demo 不生成可长期下载的账户包 | 允许本人请求 | 禁止 | 仅生成已授权 artifact | 禁止 |
+| 删除账户 | Demo 由到期/转换清理 | 允许本人请求 | 禁止代删 | 执行已受理清理任务 | 禁止 |
+| 邀请管理 | 禁止 | 非 admin 禁止 | 允许创建/撤销/查看邀请状态 | 禁止 | 禁止 |
+| 查看用户 OCR、图片、笔记、健康上下文 | 仅自己的 | 仅自己的 | 禁止 | 仅明确任务最小字段 | 仅本次被选择并发送的 payload |
+| 运行识别 | 允许，按配额并标 Demo/Fake/Real | 允许，按配额 | 禁止 | 领取任务并调用配置 provider | 只处理单次请求 |
+| 运行补剂资料助手 | 仅在该环境明确启用并标识 | 允许已开放阶段与授权范围 | 禁止 | 执行已通过 preflight 的 run | 只处理单次请求 |
+| 改 ReferenceFact/单位表 | 禁止 | 禁止 | 不能通过普通运营后台直接改 | 受控发布流程 | 禁止 |
+| 查看系统健康与非内容指标 | 最小自助状态 | 最小自助状态 | 允许 | 允许上报 | 不适用 |
+
+Admin operator 的“管理员”只管理邀请和非内容型运行状态，不是超级用户后台。若以后需要人工支持读取用户内容，必须新增用户发起、时限、字段范围、双重审计和退出机制；本 PRD 当前不授权。
+
+### 16.20 字段级授权与敏感操作
+
+| 数据/动作 | 额外规则 |
+| --- | --- |
+| 邮箱与登录身份 | 只用于认证、邀请和账户通知；不进入识别/AI provider payload |
+| 产品标签图片/OCR | 仅识别任务与用户查看证据可读；管理员不可浏览 |
+| Intake/成分/成本 | 跨产品读取必须是用户明确打开的功能；AI 默认不能自动读取 |
+| 笔记正文 | 默认只在笔记功能内；AI 需本次逐项选择，搜索索引与正文同权限 |
+| 健康上下文 | 字段 + purpose + provider + policyVersion 独立授权；撤回后新 run 不可读取 |
+| 永久删除/账户删除 | 重新验证活跃 session，展示影响范围并防 CSRF；受理后不可用普通编辑撤回 |
+| 导出下载 | 短时授权、单用户、可失效；访问记录只保存必要元数据 |
+| provider 调用 | 服务端 allowlist、预算、目的地和字段 manifest；浏览器不持有 provider key |
+| Worker 领取任务 | 服务身份 + lease + task scope；不能用普通用户 cookie 执行后台扫描 |
+
+### 16.21 数据分类、日志与对外发送
+
+| 分类 | 示例 | 日志规则 | 对外发送规则 |
+| --- | --- | --- | --- |
+| 认证秘密 | session token、验证码、密码哈希、provider key | 永不记录原值；token 只存 HMAC 摘要 | 永不发送给业务 provider |
+| 高敏感业务内容 | 健康上下文、笔记、AI 问题/回复 | 默认不记录正文；仅 requestId/对象 ID/字段 manifest | 必须本次授权、披露目的地与用途 |
+| 私有行为与财务 | intake、计划、成分、成本、导出 | 结构化 allowlist，数值尽量不进入错误日志 | 只为用户请求的功能最小发送 |
+| 私有证据 | 图片、OCR、候选、文件名 | 不记录二进制/OCR 全文；文件名先清洗 | 只发给已配置识别 provider 或用户下载 |
+| 运营元数据 | job status、latency、errorCode、版本 | 可以记录，仍包含 workspace/job 范围控制 | 监控系统使用去内容化字段 |
+| 公开参考事实 | 已登记公开来源及版本 | 可记录 source ID/version | 仅发送必要片段与来源，不抓取额外用户数据 |
+
+生产要求传输加密、数据库/对象存储静态加密、密钥独立托管和日志访问控制；当前本地运行不能被描述为已经满足生产基础设施要求。识别或 AI provider 变化、处理区域变化、保留策略变化必须更新披露并使旧的敏感授权失效。
+
+### 16.22 数据与文件生命周期
+
+| 对象 | 创建 | 正常保留 | 归档/撤销 | 永久删除触发 |
+| --- | --- | --- | --- | --- |
+| Session/Challenge | 登录或验证流程 | 配置 TTL；过期/成功即失效 | session 可主动撤销 | 账户删除立即撤销全部 session，挑战清理 |
+| Demo workspace | 首次 Demo 会话 | 已确认 24 小时无活动窗口 | 不转换数据到注册空间 | 到期对象优先、再删业务数据与用户 |
+| CaptureDraft/slot 文件 | 添加流程 | 注册用户未确认草稿按已确认 7 天窗口清理；处理中不得误删 | cancelled 后进入回收窗口 | 先删对象，再标 FileObject deleted/删草稿 |
+| 产品证据图片 | 上传/确认关联 | 产品存在且证据仍被引用时 | 产品归档仍保留 | 产品永久删除或用户删媒体后对象优先清理 |
+| Product/Schedule/Intake/Batch | 用户确认事务 | 账户有效期间保留版本和账本 | 产品归档保留全部历史 | 产品/账户删除按依赖顺序清理 |
+| revoked/superseded 记录 | 撤销/更正命令 | 作为账本和审计链保留 | 不进入当前合计 | 产品/账户永久删除 |
+| Projection revision | 重算 | 当前 + 配置的短期回滚/排障窗口 | 可安全重建 | 来源删除后清理，不单独阻塞删除 |
+| ReminderEvent | 物化时 | 支持当前/近期历史与幂等 | cancelled/expired 可压缩正文 | 产品/账户删除 |
+| Note/NoteVersion | 用户保存 | 账户有效期间保留历史 | 笔记可进入 trash grace 后删除 | 用户确认或账户删除 |
+| AiThread/AiRun | 用户发起 | 按启用前披露的期限；provider 保留另行披露 | 删除 thread 后已保存 Note 独立存在 | thread/账户删除；provider 侧按合同请求清理 |
+| ExportArtifact | 导出完成 | 短时配置 TTL，响应显示 expiresAt | 可提前撤销下载 | 到期或用户删除时对象优先清理 |
+| ClientAction/Outbox/Audit | 用户命令/领域变更 | 至少覆盖重试、争议和消费者追赶窗口 | 正文最小化，可分区压缩 | 按政策删除/匿名化，不能保留可还原内容 |
+| Backup | 生产备份任务 | 按发布时公示和灾备目标设置 | 不可当在线查询库 | 到期轮换；删除响应说明备份残留窗口 |
+
+除已确认的 Demo 24 小时和注册用户未确认草稿 7 天外，具体 TTL 由模块 18 的上线配置和隐私说明冻结。本模块不虚构一个当前系统并未实施的天数；但“无限期保留”不是默认值。
+
+### 16.23 对象优先清理、导出与删除状态
+
+```mermaid
+stateDiagram-v2
+  [*] --> Active
+  Active --> Deleting: 永久删除受理
+  Deleting --> ObjectsPending: 枚举私有对象
+  ObjectsPending --> ObjectsPending: 删除失败有界重试
+  ObjectsPending --> DataPending: 所有对象已删除或确认不存在
+  DataPending --> DataPending: 事务清理失败后重试
+  DataPending --> Deleted: 业务数据/身份清理完成
+  Deleted --> [*]
+```
+
+删除任务必须可重复执行：对象 DELETE 的“已不存在”视为成功；数据库级联必须在租户和 subject 已锁定后执行。对象清理尚未成功时不能先删除唯一的 objectKey 元数据，否则形成不可发现残留。
+
+产品删除只清理该产品、其媒体、计划、记录、批次、投影、提醒、关系及受影响的聚合；不删除无关笔记正文，但要移除关系或标记来源已删除。账户删除先撤销会话并阻止新写入，再清理用户所有对象和业务数据，最后清理身份。完成前只暴露非内容型进度和 requestId。
+
+导出必须发生在删除受理前或删除确认页显式提供的窗口内；账户进入 pending_deletion 后不再启动新导出。已生成导出也属于用户私有对象，账户删除时一并清理。
+
+### 16.24 数据库完整性、索引与审计要求
+
+- 每个核心表的主键使用随机不可枚举 ID；业务自然键另设唯一约束。
+- 聚合根的 `(id, user_id, workspace_id)` 可作为组合归属校验；子对象外键不能跨 workspace。
+- ClientAction 唯一键至少为 `(workspace_id, client_action_id)`；requestHash 与成功/拒绝结果不可被后续 payload 覆盖。
+- 同一产品有效 ScheduleVersion、PlanStateInterval 的生效区间不得重叠；同一 occurrence 自然键唯一。
+- IntakeAllocation 只能引用同 product/workspace 的 intake 和 batch；分配总和由事务/延迟约束验证。
+- 每个 intake allocation 对应唯一消费 InventoryEvent 与 AllocationCostSnapshot；撤销补偿事件引用原事件。
+- 数量、金额和成分剂量禁止 float；数据库 CHECK 防负数、无效币种和不支持的精度。
+- 当前批次余额不能小于 0，且不得高于初始量加合法补货/调整后的账本上限。
+- SlotVersion、ScheduleVersion、IngredientProfileVersion、NoteVersion 和 ReferenceFactVersion 不允许 UPDATE 正文；只允许追加及切换当前指针。
+- OutboxEvent 与核心写入同事务；消费者按 `(consumer, eventId)` 或等价键幂等。
+- FileObject 的 active/deleted 状态与 object cleanup phase 可核对；定时 orphan reconciliation 不能越过 grace 删除仍被引用对象。
+- 审计记录保存 actor、action、resource type/id、before/after 版本、result、requestId 和时间，不默认保存正文快照。
+- 高频读取必须有租户前缀索引；任何缺少 workspace/user 过滤的业务查询在代码审查与测试中视为发布阻断。
+
+### 16.25 当前实现与目标模型差距
+
+| 领域 | `VERIFIED_CURRENT` | `APPROVED_TARGET` |
+| --- | --- | --- |
+| 租户 | User/Workspace/Member/Session 已存在，核心查询普遍同时过滤 userId/workspaceId | 固化双租户归属约束、所有新域沿用、未来协作继续关闭 |
+| 产品状态 | `products.status` 混合 active/paused/depleted/archived | 拆为 catalogState、planState、stockState、riskState；旧值迁移 |
+| 产品类型 | schema 仍含 supplement/otc/prescription | UI/API 只允许 supplement；旧枚举不恢复入口 |
+| 配方 | `product_ingredients` 当前态替换 | IngredientProfileVersion + 原标签/规范化/换算版本 |
+| 计划 | current row + 部分 day-cycle 历史 | 完整不可变 ScheduleVersion、DoseSlot、PlanStateInterval、时区快照 |
+| 记录与库存 | FEFO、allocation、inventory event、精确撤销和固定精度已有底座 | 补 correction/supersede、成本快照、全命令幂等、完整 outbox |
+| 识别 | 三文件 set、持久 job/lease/retry、私有文件、确认事务 | 三槽独立版本、旧结果 stale、可恢复 draft 与 orphan 对账 |
+| 数值 API | 当前 OpenAPI 多处用 JSON number | 统一十进制字符串与明确 currency/unit |
+| 幂等/并发 | intake/确认等局部存在 | 所有事实写命令 ClientAction/requestHash/expectedVersion |
+| 派生数据 | 多为请求时计算，缺统一 revision | source vector、staging、原子激活、fresh/stale/failed |
+| 成分/成本/提醒/笔记/AI | 完整数据域尚未全部实现 | 按 R1–R4 对象合同交付，AI 永远只读核心事实 |
+| 删除 | Demo/账户对象优先清理已有实现底座 | 产品/笔记/导出/AI 等全部接入统一 lifecycle 和状态查询 |
+| 权限 | member/admin 枚举已存在 | member 不开放；admin 不读内容；worker/provider 最小范围 |
+
+### 16.26 验收标准
+
+- Given 用户 B 构造用户 A 的 product、file、job、note、export 或 aiRun ID，When 调用任一读取/写入 API，Then 返回不可枚举结果，数据库查询包含有效 userId/workspaceId 范围。
+- Given body 中伪造另一个 workspaceId，When 服务端处理，Then 不采用客户端 scope，也不泄露目标是否存在。
+- Given 当前产品库存为 0 且计划 active，When 读取详情，Then API 分别返回 catalogState=in_cabinet、planState=active、stockState=depleted，不再合并成单一 status。
+- Given 旧 schema 中存在 prescription 枚举，When 新客户端建档或编辑，Then API 拒绝非 supplement，且 UI 无处方药入口。
+- Given 用户替换成分槽图片，When 旧 job 晚到成功，Then Evidence 仍绑定旧 slotVersion，当前确认稿不变化。
+- Given 对象上传成功但元数据事务失败，When 超过 orphan grace 且无引用，Then reconciliation 删除对象并留下去内容化结果。
+- Given 建档确认在创建 opening batch 前失败，When 查询数据库，Then Product、版本、批次、证据确认状态和 outbox 均未部分提交。
+- Given 两设备用相同 expectedVersion 保存不同计划，When 并发，Then 只有一笔新 ScheduleVersion 生效，另一笔返回 version_conflict 并保留草稿。
+- Given 同一 ClientActionId 与相同 payload 重试，When 原请求已成功，Then 返回同一资源和 aggregateVersion，不重复写账本。
+- Given 同 key 但 payload 不同，When 重试，Then 返回 idempotency_conflict，不能覆盖原 ClientAction。
+- Given intake 使用两个批次，When 事务提交，Then allocation 总和等于 intake quantity，每条分配都有消费事件和成本快照，批次余额可由事件回放一致得到。
+- Given intake 成功而成分投影失败，When 读取记录和成分页，Then 记录/库存为成功，成分页返回上一完整 revision + projectionState=failed/stale，不混合半份新结果。
+- Given 新 contribution 在重算期间写入，When staging revision 准备激活，Then source vector 校验失败并补算，不能发布遗漏记录的 fresh revision。
+- Given 用户修改产品名称，When 查看旧 intake/导出，Then 旧记录仍有当时可解释快照或明确关联版本，不能被新名称/配方反推改写。
+- Given API 返回数量、剂量或金额，When 客户端解析，Then 值为十进制字符串并含 unit/currency，OpenAPI contract test 不允许 number 回归。
+- Given 用户撤回健康上下文授权，When 新建 AI run，Then preflight/tool/context assembly 都不能读取该字段；旧 snapshot 按已披露期限处理。
+- Given AI 问题被安全策略拒绝，When 查看运行链，Then 存在 PolicyDecision、provider 调用数为 0、核心领域表无任何写入。
+- Given 用户选择把 AI 回复保存为笔记，When 未确认可编辑预览，Then 无 NoteVersion；确认后只创建笔记版本，不改写 AI 消息或产品事实。
+- Given Admin operator 查看邀请后台，When 尝试请求文件、OCR、记录、笔记或健康对象，Then授权拒绝且审计只记录去内容化信息。
+- Given ExportArtifact 到期，When 再次下载，Then授权失败且对象进入清理；过期链接不能继续公开访问。
+- Given 产品永久删除对象清理失败，When 重试任务，Then Product 保持 deleting、普通写入被拒绝、objectKey 仍可枚举用于继续清理。
+- Given 账户删除已受理，When 用户使用旧 session，Then 会话无效且不能创建新导出/记录；清理完成前只可查看非内容型状态。
+- Given Demo 24 小时无活动或注册草稿超过 7 天，When 清理器运行，Then 只清理符合范围且未被有效引用的数据；真实账户业务数据不受 Demo job 影响。
+- Given 任何新私有表或 endpoint 被加入，When 执行架构测试，Then 必须证明租户键、删除路径、日志分类、版本规则和导出处理；缺一项即不允许发布。
+
+### 16.27 本模块确认点
+
+本模块建议冻结以下实现边界：
+
+1. PostgreSQL 保存核心事实、证据元数据和派生 revision；私有对象存储只保存二进制；浏览器缓存和外部 provider 都不是事实源。
+2. 目标模型按身份、建档、产品、计划、记录/库存、成分、提醒、笔记、AI 等聚合分区；跨域只通过受约束 ID、版本和最小快照关联。
+3. 当前 `products.status` 必须拆为 catalog/plan/stock/risk 四维；旧 prescription 枚举不构成功能，目标 API 只接受 supplement。
+4. 所有私有聚合根使用不可猜 ID，并按 session 派生的 userId + workspaceId 授权；当前不开放 workspace member 协作，Admin 也不能读取用户内容。
+5. 所有事实写命令统一 Idempotency-Key/ClientAction、requestHash 和 expectedVersion；数值 API 使用十进制字符串，异步结果携带明确 revision 与新鲜度。
+6. Schedule、配方、偏好、笔记和参考事实使用不可变业务版本；投影以完整 staging revision 原子切换，不能混合新旧结果。
+7. 文件、导出和账户删除均采用对象优先、可重试清理；Demo 24 小时、未确认草稿 7 天沿用已确认窗口，其余 TTL 在上线模块冻结而不虚构。
+8. 当前 OpenAPI 只算 launch-beta 事实；完整资源面按 R1–R4 交付，迁移与兼容顺序留给模块 18，不把目标接口写成已上线。
+
+请确认模块 16。确认后，模块 17 将建立埋点事件、指标计算、邀请/运营管理、任务监控、告警与可观测性合同，并继续遵守去内容化和租户隔离原则。

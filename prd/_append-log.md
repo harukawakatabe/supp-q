@@ -10,4 +10,5 @@
 | 2026-09-19 | M6 三槽采集、异步识别与人工确认 | MVP 添加流程、Uni recognition 代码/OpenAPI/架构/评测门禁、当前前端建档页 | 已确认 | 无 |
 | 2026-09-19 | M7 补剂柜与产品资料 | MVP 柜页/详情/PRD、Uni 当前页面/API/领域服务/数据表、shaping 页面与规则差距 | 已确认 | 无 |
 | 2026-09-19 | M8 计划规则、计划版本与计划视图 | MVP 计划 PRD/页面、Uni schedule 核心/测试/表结构/API、shaping 规则差距 | 已确认 | 无 |
-| 2026-09-19 | M9 今日执行、补录、临时服用与历史记录 | MVP today/history PRD、Uni intake/Today/记录页/迁移/集成测试、已确认 M8 occurrence 合同 | 待用户确认 | occurrence 粒度、来源语义、幂等与替换、库存失败边界、历史日期/分页、无库存完成率口径 |
+| 2026-09-19 | M9 今日执行、补录、临时服用与历史记录 | MVP today/history PRD、Uni intake/Today/记录页/迁移/集成测试、已确认 M8 occurrence 合同 | 已确认 | 无 |
+| 2026-09-19 | M10 多批次库存、FEFO、撤销与风险预测 | MVP 库存/批次/提醒规则、Uni inventory core/迁移/API/页面/测试、shaping 规则差距、已确认 M7–M9 状态与记录合同 | 待用户确认 | 账本权威、FEFO 排序、补录入账时点、盘点调整、撤销与后续盘点、低库存口径、有效期精度与风险 |

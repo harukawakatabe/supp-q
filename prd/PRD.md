@@ -2443,3 +2443,454 @@ R1 不能退回“按产品按日聚合”的旧模型，否则模块 8 的多�
 6. 无库存 occurrence 仍保留在计划完成率分母并单列阻塞原因；临时记录不计入计划完成率，避免制造虚假完成。
 
 请确认模块 9。确认后，模块 10 将定义多批次库存、FEFO、补货/调整、精确撤销约束、耗尽预测和临期/缺货风险。
+
+## 10. 多批次库存、FEFO、撤销与风险预测
+
+### 10.1 模块目标与边界
+
+本模块把库存从“产品上的一个剩余数字”升级为可回放、可解释、可纠错的批次账本，并让计划、实际记录和风险提示消费同一份确定性结果。
+
+用户需要得到五个明确答案：
+
+1. 这个产品实际还有多少，分别在哪些批次。
+2. 下一次记录默认会从哪个批次扣除，为什么。
+3. 补货、盘点、撤销和更正后，库存是否仍能从账本重算得到。
+4. 按已经确认的未来计划，库存可以完整覆盖到哪个时点，第一次不足发生在何时。
+5. 哪个批次已经过期、临近有效期或预计无法在有效期前消耗完，结论依据是什么。
+
+本模块定义批次、库存事件、自动/手工分配、补货、盘点调整、撤销恢复、库存覆盖预测和批次有效期风险。批次价格、单位成本、累计消耗成本和库存价值由模块 11 定义；提醒何时触达由模块 13 定义。本模块只产生确定性风险事实，不让 AI 决定批次、数量、有效期、FEFO 顺序或风险等级。
+
+### 10.2 库存、计划和产品状态必须分离
+
+沿用模块 7 已确认的四维状态：
+
+- `catalogState` 表示产品是否仍在补剂柜。
+- `planState` 表示用户是否暂停计划。
+- `stockState` 从批次可用余额和补货阈值派生。
+- `riskState` 从批次有效期和未来 occurrence 模拟派生。
+
+库存变化只能改变 `stockState` 和风险投影，不能改变 `planState`：
+
+| 操作 | stockState | planState | occurrence |
+| --- | --- | --- | --- |
+| 摄入后可用库存归零 | 派生为 depleted | 保持原值 | 计划时点仍存在并标记无库存 |
+| 给 active 产品补货 | 重新派生 | 仍为 active | 后续时点恢复可执行 |
+| 给 paused 产品补货 | 重新派生 | 仍为 paused | 不自动恢复任务 |
+| 撤销摄入恢复库存 | 重新派生 | 保持原值 | 仅重算关联时点状态 |
+| 丢弃过期批次 | 重新派生 | 保持原值 | 不修改过去或未来计划 |
+
+`depleted` 不再是可写的 Product 状态。用户也不能通过把产品手工标成耗尽来代替真实库存调整。
+
+### 10.3 核心对象与账本权威
+
+#### 10.3.1 InventoryBatch
+
+一个实物瓶、袋或同一次可视为同质库存的购入单位对应一个 `InventoryBatch`。同产品再次购入默认新增批次，不修改旧批次总数。
+
+每个批次至少包含：
+
+- `id`、`workspaceId`、`productId`。
+- `unitSnapshot`：建批时的产品管理单位；产品已有数量事实后单位被锁定。
+- `receivedQuantity`：建批时录入的数量，作为原始事实保留，不因盘点改写。
+- `currentQuantityProjection`：库存事件的物化投影，不是独立可编辑字段。
+- `receivedAt`：用户声明的到货/开始持有日期，默认今天，可修改为过去日期作为元数据。
+- 可空 `lotCode`。
+- 有效期证据：原文、精度 `day/month/year/unknown`、对应的日期或期间、来源图片 ID。
+- 可空 `openedAt`；只表示用户记录的开封事实，不自动改变计划。
+- `lifecycleState`：`available_unstarted / in_use / depleted / voided`。
+- `version`、`createdAt`、`createdBy`、`updatedAt`。
+- 价格字段由模块 11 定义，不作为库存正确性的前置条件。
+
+批次生命周期与有效期风险正交。一个批次可以同时是 `in_use + near_expiry`，也可以是 `available_unstarted + expired`；不能用一个枚举把“用过没有”和“是否过期”压成同一状态。
+
+#### 10.3.2 InventoryEvent
+
+库存数量只通过追加事件改变。事件至少包含：
+
+- `id`、`workspaceId`、`productId`、`batchId`。
+- `kind`：`opening / restock / intake / intake_undo / adjustment_increase / adjustment_decrease / batch_void_reversal`。
+- 固定精度 `quantityDelta`，增加为正，扣减为负。
+- `sourceType` 与 `sourceId`，例如 intake、adjustment 或 batch command。
+- `postedAt`：事件进入库存账本并改变当前余额的服务端提交时间。
+- 可空业务元数据日期，例如 `receivedAt`、intake 的 `occurredAt`；它们不能替代 `postedAt` 重排账本。
+- `reasonCode`、可空 note、操作者。
+- `ClientActionId`、规范化请求摘要。
+- `batchVersionBefore` 和提交后的 `balanceAfter`，用于并发核对和排障。
+
+事件一经提交不可原地修改或删除；纠错使用补偿事件。永久删除产品或账户时，按已确认的数据清理合同级联删除整条业务数据，不留下可反推个人内容的孤立事件。
+
+#### 10.3.3 IntakeAllocation
+
+`IntakeAllocation` 记录一条 intake 从一个或多个批次分别消耗的数量、分配模式和当时批次快照。所有 allocation 之和必须等于 intake quantity。它既是撤销时的精确恢复依据，也是模块 11 的成本归属依据。
+
+#### 10.3.4 权威关系
+
+```text
+batch_current_quantity = sum(valid inventory_event.quantity_delta for batch)
+product_on_hand_quantity = sum(batch_current_quantity for non-voided batches)
+```
+
+数据库可以保存 `currentQuantityProjection` 提高查询性能，但每次写事务必须同时写事件和更新投影；后台审计可从事件回放，并要求二者 100% 一致。前端不得自行维护另一个库存总数。
+
+### 10.4 页面与入口
+
+批次与库存不增加全局一级导航，集中在产品详情的“库存与风险”入口：
+
+1. 产品库存摘要：管理单位、总在手量、可自动分配量、过期余量、库存状态、预计首次不足时点。
+2. 风险摘要：最高优先级风险、受影响批次数、最近风险日期和“查看依据”。
+3. 批次列表：按需要处理优先，再按 FEFO 顺序展示。
+4. 主要动作“新增批次”；次级动作“盘点/调整”。
+5. 批次详情：原始数量、当前余额、有效期证据、到货/开封信息、事件时间线、关联摄入和调整。
+6. 库存账本：按事件倒序展示变化前后、原因、来源和操作者，支持按批次与事件类型筛选。
+
+产品详情与补剂柜卡片只显示摘要，不展开全部事件。每个风险结论都提供计算说明入口，至少能看到：参与计算的批次、可用数量、未来计划版本、计算时区、计算时间和首次不足/有效期日期。
+
+### 10.5 新建产品首批库存与后续补货
+
+#### 10.5.1 首批库存
+
+确认新产品时，首批库存与 Product、首个资料版本和首个计划版本在同一确认事务内创建。用户尚未拥有实物库存时，可以明确选择“暂不录入库存”，系统创建产品但不制造数量为 1 或 30 的假批次；产品随即显示无库存。
+
+模块 6 中“创建 depleted 产品”的旧措辞在模块 7 四维状态确认后，统一解释为 `stockState=depleted`；不是把 Product 或 planState 写成 depleted。该澄清不改变“允许零初始库存且不创建零数量批次”的已确认范围。
+
+有首批库存时：
+
+- 数量必填且大于 0。
+- 单位继承已确认的产品管理单位。
+- 有效期、到货日、批号、开封日和价格均可选；未填写有效期必须显示 unknown，不能显示为安全。
+- 建批与一条等量 `opening` 事件同事务提交。
+- 有效期图片归属该批次，不覆盖其他批次。
+
+#### 10.5.2 后续补货
+
+“新增批次”用于新买一瓶、换一批货或增加一组独立有效期库存：
+
+- 数量必填；有效期、到货日、批号、开封日、价格选填。
+- 默认新增独立 batch 和等量 `restock` 事件，不把数量加到旧批次。
+- 页面可复制上一批的非数量字段作为草稿，但必须由用户确认；有效期和批号不自动继承。
+- 命令使用稳定 ClientActionId 和请求摘要，弱网重试不得重复增加一瓶。
+- 已暂停产品补货后仍暂停；active 产品补货后只恢复库存可用性。
+- archived 产品不能补货，需先恢复到补剂柜；deleting/deleted 永久拒绝。
+
+同一瓶录错数量不应通过“再加一瓶”掩盖，应使用盘点调整。批次元数据录错可做带版本历史的字段更正；修改有效期只影响未来 FEFO 和风险，不重写已经保存的 intake allocation。
+
+### 10.6 FEFO 自动分配
+
+#### 10.6.1 自动可用批次
+
+一个批次同时满足以下条件才进入默认自动分配：
+
+- 非 voided。
+- 当前余额大于 0。
+- 未超过有效期期间的结束边界，或有效期 unknown。
+- 与 intake 的产品和管理单位一致。
+
+已经过期且仍有余额的批次不进入自动 FEFO；否则系统会把已识别的风险库存优先当成默认来源。unknown 有效期不是 safe，但仍可作为最后顺位库存。
+
+#### 10.6.2 稳定排序
+
+自动 FEFO 顺序固定为：
+
+1. 已知有效期结束边界更早者优先。
+2. 同一有效期时，`receivedAt` 更早者优先。
+3. 仍相同时，`createdAt` 更早者优先。
+4. 最后以 batch ID 稳定排序，保证并发设备得到同一结果。
+5. unknown 有效期排在所有未过期、已知有效期批次之后，再按 receivedAt、createdAt、ID 排序。
+
+一次 intake 可以跨多个批次拆分。服务端在事务中锁定候选批次、先检查可分配总量，再生成全部 allocation；总量不足则整笔失败，不做部分扣减。
+
+#### 10.6.3 手工指定实际批次
+
+默认使用自动 FEFO，但用户明确知道实际使用了哪一瓶时，可以在展开项中指定一个或多个批次。手工选择必须完整覆盖本次数量并保存 `allocationMode=manual`，不能只指定一部分后让系统静默补齐。
+
+若用户选择已过期批次，系统不得把它当作推荐选项；只有用户从批次明细主动选择并再次确认“记录实际来源”后才允许写入，同时保存 `expired_batch_override`。这既覆盖用户真实发生的记录，也覆盖“过去摄入发生时未过期、补录时已经过期”的情况。
+
+### 10.7 历史补录的库存入账时点
+
+模块 9 的 intake `occurredAt` 仍按用户选择的历史时间归入记录和成分日历；但库存事件按提交事务的 `postedAt` 进入当前账本，并基于提交时仍可用的批次执行 FEFO。
+
+选择这一规则的原因是：补录不能静默插入过去后重排已经存在的后续 allocation，否则后续摄入的批次、成本和撤销依据都会变化。系统必须明确展示：
+
+- “摄入发生于 YYYY-MM-DD HH:mm”。
+- “库存补扣于 YYYY-MM-DD HH:mm”。
+- 自动分配依据是补录提交时的批次余额与 FEFO 顺序。
+
+用户知道实际历史批次时可使用手工指定；不知道时保留系统分配结果，不伪装成历史物理来源。补录、补录更正和撤销均遵守同一事件追加规则，不回放或改写后续历史。
+
+### 10.8 盘点与库存调整
+
+#### 10.8.1 默认交互采用“盘点到实际余额”
+
+用户选择具体批次，页面展示服务端当前余额，输入实际数到的剩余量。服务端在锁定批次后计算：
+
+```text
+quantity_delta = counted_quantity - current_quantity_before
+```
+
+- `counted_quantity` 必须大于等于 0，并使用产品管理单位与固定精度。
+- 数量减少写 `adjustment_decrease`，数量增加写 `adjustment_increase`。
+- 调整原因必填：`count_correction / damaged_or_lost / discarded_expired / returned / other`；other 必须补充备注。
+- 新购入库存应新增 batch；正向 adjustment 只用于纠正原批次少记、退回或盘点差异。
+- 若输入与当前余额相同，不写数量事件，返回“库存无需调整”。
+
+`receivedQuantity` 保留最初录入值；调整后的 current 可以高于 receivedQuantity，但必须显示“存在正向盘点修正”，不能悄悄改大原始入库数量。成本覆盖规则由模块 11 处理。
+
+#### 10.8.2 并发与撤回
+
+打开调整页时带上 `batchVersion`。若期间发生 intake、补货更正、撤销或另一笔调整，服务端返回版本冲突和最新余额；不能把用户基于旧余额计算的 delta 直接写入。
+
+调整命令使用 ClientActionId 和请求摘要。已提交的 adjustment 不可编辑或删除；用户发现调错时，对同一批次发起一笔新的反向/重新盘点事件，并在时间线中关联原 adjustment。
+
+产品归档后默认只读，不能新增库存调整；历史 intake 撤销仍按模块 9 的账本纠错例外执行。永久删除进入 deleting 后拒绝全部库存命令。
+
+### 10.9 批次作废与耗尽
+
+- 批次余额为 0 时 lifecycleState 派生为 depleted，仍保留事件和 allocation。
+- 用户误建批次且该批次除自身 opening/restock 外没有 allocation 或 adjustment 时，可以“作废批次”；系统写入等量 `batch_void_reversal`，把批次置为 voided，不做物理删除。
+- 已发生 intake allocation 或调整的批次不能作废；应通过盘点调整到真实余额并保留历史。
+- 丢失、损坏或过期丢弃使用带原因的 adjustment_decrease，不把批次直接删除。
+- voided 和 depleted 批次不进入默认批次列表，但在“全部/历史”筛选及账本中可达。
+
+产品级数量投影：
+
+| 字段 | 口径 |
+| --- | --- |
+| `onHandQuantity` | 所有非 voided 批次当前余额之和，包括已过期余量 |
+| `expiredQuantity` | 已超过有效期结束边界且仍有余额的数量 |
+| `autoAllocatableQuantity` | 自动 FEFO 可用批次余额之和；unknown 有效期可用但单列 |
+| `unknownExpiryQuantity` | 无有效期证据且仍有余额的数量 |
+
+当 `autoAllocatableQuantity=0` 时，stockState 为 depleted；如果仍有 expiredQuantity，页面同时显示“仅剩过期库存”，不能只显示笼统的“0”。低库存基于可自动分配量和未来计划覆盖计算，不基于包含过期库存的 onHandQuantity。
+
+### 10.10 摄入撤销和更正的库存约束
+
+撤销永远读取原 `IntakeAllocation`，向同一批次分别写等量 `intake_undo` 事件；禁止重新运行 FEFO 猜测该还到哪一瓶。重复撤销返回既有结果，不重复增加余额。
+
+目标账本不再以 `currentQuantity <= receivedQuantity` 作为撤销上限。正向盘点修正和后续补偿可能使余额高于原始入库量；正确性由事件和 allocation 守恒保证，而不是用原始数量上限阻断合法撤销。
+
+若原 intake 之后发生过盘点调整：
+
+- 撤销仍按原批次精确补偿，后续 adjustment 不被删除或改写。
+- 页面标记 `recount_recommended`，说明先前盘点是基于撤销前余额完成，建议用户重新核对实物。
+- 系统不能为了维持旧盘点数字而把 undo 恢复到别的批次或吞掉恢复量。
+
+intake 更正继续使用模块 9 的原子替换合同：原 allocation 的补偿、新 intake 的新 allocation、状态链和所有库存事件同事务提交；任一步失败则原 intake 与原库存保持不变。
+
+### 10.11 计划覆盖与首次不足预测
+
+简单的 `currentQuantity / 当前每日数量` 无法处理多时点、未来计划版本、暂停区间和不等量 slot。目标预测从工作区当前本地时间开始，读取：
+
+- 所有自动可分配批次及 FEFO 顺序。
+- 模块 8 的历史/未来 ScheduleVersion、doseSlots、暂停区间和时区。
+- 今天每个 occurrence 已关联的有效 intake，只预测尚未完成的剩余计划量。
+- 模块 9 的实际记录；未来 ad_hoc 不可预测，因此不纳入。
+
+服务端按未来 occurrence 时间顺序模拟分配：
+
+```mermaid
+flowchart TD
+  A[当前可自动分配批次] --> B[生成未来 occurrence 流]
+  B --> C[扣除今天已完成或部分完成量]
+  C --> D{下一 occurrence 能否完整分配}
+  D -- 是 --> E[按 FEFO 模拟扣减并继续]
+  E --> D
+  D -- 否 --> F[记录首次不足时点与缺口]
+  D -- 库存恰好归零 --> G[记录预计耗尽时点]
+```
+
+输出至少包含：
+
+- `coveredOccurrenceCount`：可以完整覆盖的未来计划时点数。
+- `coveredPlanDayCount`：当天所有剩余时点都能完整覆盖的未来计划服用日数。
+- 可空 `projectedDepletionAt`：某个 occurrence 完成后库存恰好归零的时点。
+- 可空 `firstShortfallOccurrenceAt`、产品、slot 和 `shortfallQuantity`。
+- `calculationState`：`calculated / no_future_plan / paused / beyond_horizon / invalid_plan`。
+- `calculatedAt`、时区、事实版本和计划版本集合。
+
+预测安全上限为未来 10 年或库存全部分配完，以先到者为准。达到上限仍未耗尽时返回 beyond_horizon 和“10 年内未预计耗尽”，不能编造一个日期。无未来计划、计划暂停和计划错误必须返回不同状态。
+
+#### 10.11.1 低库存阈值
+
+沿用 MVP 已有设置的真实语义：`restockThresholdDays` 表示“可完整覆盖的未来计划服用日数阈值”，不是自然日倒计时，也不是时点次数。页面统一改写为“剩余计划日阈值”，避免继续显示含糊的“提前补货（天）”。
+
+当存在未来 occurrence，且 `coveredPlanDayCount <= restockThresholdDays` 时派生 stockState=low；可自动分配量为 0 时优先为 depleted。页面必须同时展示日历上的首次不足日期，不能把“还可覆盖 7 个计划日”写成“7 天后用完”。
+
+### 10.12 批次有效期与风险预测
+
+#### 10.12.1 有效期精度
+
+延续模块 6 的证据规则，不为 `03/2027` 等证据伪造精确日期：
+
+| 精度 | 保存 | 风险计算边界 | 展示 |
+| --- | --- | --- | --- |
+| day | 精确日期与原文 | 当日本地日结束为结束边界 | “有效期 2027-03-15” |
+| month | 年月与原文 | 期间 1 日为提醒早界，月末为过期晚界 | “有效期 2027-03，具体日未知” |
+| year | 年与原文 | 1 月 1 日为提醒早界，12 月 31 日为过期晚界 | “有效期 2027，具体月日未知” |
+| unknown | 原文可空 | 不计算过期日 | “未记录有效期，风险未知” |
+
+month/year 的月末或年末只用于派生计算边界，不回写成包装声称的精确日期。进入精度区间后状态必须显示“日期精度有限”，不能把估算结果写成确定安全。
+
+#### 10.12.2 批次风险
+
+对每个有余额批次，使用同一未来 occurrence 流和 FEFO 模拟结果派生：
+
+| 风险 | 条件 | 说明 |
+| --- | --- | --- |
+| `expired` | 当前本地日期已超过有效期结束边界且余额 > 0 | 最高优先级；排除自动分配 |
+| `unfinishable` | 模拟到有效期结束边界后该批次仍有预计余额 | 按当前计划预计无法用完 |
+| `near_expiry` | 距有效期提醒早界 <= expiryReminderDays，且尚未 expired | 临近有效期；可与精度有限同时存在 |
+| `precision_limited` | month/year 且已进入可能到期区间 | 日期不完整，不能断言具体哪天过期 |
+| `unknown` | 无有效期 | 不能计算，不等于 safe |
+| `safe` | 有精确边界、未进入提醒窗口且模拟可在边界前分配完 | 仅表示库存计划风险，不表示产品医学安全性 |
+| `depleted` | 余额为 0 | 不再产生未来有效期风险，历史仍保留 |
+
+产品级 riskState 使用优先级：expired > unfinishable > near_expiry > unknown/precision_limited > safe。页面同时保留各批次明细，不能只返回单个颜色后丢失多个并存风险。
+
+#### 10.12.3 最晚启用/恢复日期
+
+仅对“计划尚未开始”或 `planState=paused` 且存在已知有效期库存的产品计算最晚启用日期。算法保持现有 ScheduleVersion、周期锚点和 doseSlots 不变，模拟候选启用日期，取仍能让所有已知有效期批次在各自结束边界前按 FEFO 完整分配的最晚本地日期。
+
+进行中的 active 产品不展示“最晚开始”，只展示预计耗尽和是否来得及用完。无计划、计划无交集、有效期 unknown 或 10 年范围内无解时返回原因状态，不显示“无法计算”为一个模糊结论。
+
+### 10.13 风险重算与展示一致性
+
+以下事实变化必须使库存和风险投影失效并由服务端重算：
+
+- intake 创建、撤销或更正。
+- 批次新增、作废、元数据更正或库存调整。
+- ScheduleVersion 新建、计划暂停/恢复或 occurrence 变化。
+- 工作区时区显式变更。
+- 本地自然日跨日，使有效期和提醒窗口发生变化。
+
+补剂柜、产品详情、今日、计划、提醒和后台审计必须消费同一投影版本。服务端可缓存结果，但响应同时返回 `calculatedAt` 与事实版本；页面不能用旧缓存把已过期批次显示为 safe。
+
+### 10.14 失败、并发与恢复
+
+| 场景 | 处理 |
+| --- | --- |
+| 补货请求超时 | 使用同一 ClientActionId 查询/重试；不得新增重复批次 |
+| 两台设备同时消耗最后库存 | 锁定批次后只有可完整分配的事务成功，另一笔得到明确库存不足 |
+| 调整页打开后余额变化 | 返回 batch version conflict、最新余额和差异；不写陈旧 delta |
+| 风险计算失败 | 库存事实仍可查看，风险显示“暂不可计算”与重试；不得默认 safe |
+| 批次元数据更正冲突 | 保留本地草稿，展示远端版本；不得最后写入静默覆盖 |
+| 过期批次自动分配 | 服务端拒绝；只有显式 manual override 可使用 |
+| 批次作废时已有 allocation | 拒绝作废，引导盘点调整 |
+| 账本投影审计不一致 | 将对象标记 reconciliation_required、阻止新的自动分配并告警；不得自动改数掩盖 |
+| 撤销发生在后续盘点之后 | 完成精确补偿并提示重新盘点，不改写旧 adjustment |
+
+库存写命令均校验 workspace、产品状态、批次版本和 ClientActionId。只知道 batchId 不构成授权；跨租户对象返回与不存在相同的结果。
+
+### 10.15 当前 Uni 与目标合同的差距
+
+| 能力 | 当前 Uni（代码核对） | 目标处理 |
+| --- | --- | --- |
+| 首批库存 | 创建 Product 强制 openingBatch 数量大于 0 | 支持用户明确选择当前无库存，不创建零数量批次或假事件 |
+| 批次基础 | 有 initial/current、精确日期、价格和创建时间 | 增加单位/到货/批号/开封/有效期精度/版本与状态 |
+| 补货 | 可新增批次并写 restock event，但无幂等键 | 稳定 ClientActionId，防弱网重复加瓶 |
+| 库存调整 | event kind 预留 adjustment，但无服务、API 和页面 | 批次级盘点到实际余额、原因、版本冲突和补偿事件 |
+| FEFO | 已知日期升序、unknown 最后、同日期按 createdAt | 排除过期批次，补 receivedAt 和 ID 稳定并列规则，支持显式手工来源 |
+| 跨批次摄入 | 已能事务拆分 allocation，不足整笔失败 | 保留为不可回归合同 |
+| 历史补录 | 以提交时当前批次运行同一 FEFO，但语义未说明 | 明确 occurredAt 与 inventory postedAt 分离，不回放后续历史 |
+| 精确撤销 | 已按原 allocation 恢复且重复安全 | 保留；兼容正向调整，撤销后必要时提示重新盘点 |
+| 数量约束 | current 被限制不得超过 initial | 允许带审计的正向盘点修正；正确性改由事件守恒保证 |
+| 产品状态 | 归零写 depleted，补货/撤销自动写 active | 删除库存对 planState 的副作用；stockState 单独派生 |
+| 预测 | 当前库存 ÷ 固定 daily，并用当前 schedule 最多扫描 100 年 | 逐 occurrence、未来版本、今日剩余量和 10 年显式上限 |
+| 风险范围 | 只取最早未耗尽有效期，并用全部产品库存计算 | 每批独立模拟，再按优先级汇总产品风险 |
+| 过期库存 | 仍可能被自动 FEFO 扣除 | 自动排除，手工实际来源需显式确认 |
+| 有效期精度 | 只接受 YYYY-MM-DD | 支持 day/month/year/unknown 和范围解释 |
+| 库存账本 | 数据表有事件但用户无查看入口 | 批次详情和筛选时间线；所有结论可追溯 |
+
+现有 Uni 的事务 FEFO、跨批次 allocation、固定精度数量、库存不足回滚和精确撤销是本模块继续保留的工程底座。需要替换的是状态耦合、风险聚合和缺失的用户侧调整能力，不应为了补页面重写已经正确的事务核心。
+
+### 10.16 迁移规则
+
+从当前 Uni 迁移时：
+
+- 每条现有 inventory_batch 原样保留为独立批次；`receivedQuantity=initial_quantity`，`receivedAt=created_at` 的本地日期，unitSnapshot 取迁移时已锁定产品单位。
+- 现有非空 expiry_date 迁为 day 精度；空值迁为 unknown，不补默认日期。
+- opening、restock、intake、undo 事件和 allocation 保留原 ID、数量和关联。
+- 当前 materialized quantity 与事件回放不一致的批次进入 reconciliation_required，不用迁移脚本静默覆盖任一边。
+- 旧 `status=depleted` 迁为 `stockState` 派生结果；catalogState 保持在柜，planState 依据可证明的历史用户意图迁移。无法证明原计划是否曾暂停时标记 migration_review，不擅自恢复提醒。
+- 迁移后先全量回放审计，再开放库存写入；审计失败的对象只读并提供人工修复路径。
+
+MVP/Web 的 localStorage 单瓶对象只作为参考，不直接导入生产 Uni。若未来提供用户数据导入，旧产品至少转换成一个 legacy batch，并把缺失有效期、批次来源和价格明确标为 unknown，而不是伪造完整历史。
+
+### 10.17 交付顺序
+
+| 阶段 | 必须交付 |
+| --- | --- |
+| R1 可信闭环 | 批次账本、幂等新增批次、过期排除的稳定 FEFO、跨批次原子扣减、精确撤销、批次级盘点调整、stockState 解耦、逐 occurrence 首次不足预测、基础批次风险与迁移审计 |
+| R2 完整管理 | 手工指定批次、批次元数据版本/作废、完整账本筛选、有效期精度区间、最晚启用模拟和风险解释详情 |
+| R3/R4 | 提醒与多端只消费同一库存/风险投影；AI 只能解释已计算事实，不能改变批次或风险结果 |
+
+模块 11 在同一 allocation 与批次事件上增加成本口径，不能另建一套数量账本。模块 13 只决定何时、通过什么站内渠道通知，不能重新计算低库存或临期。
+
+### 10.18 指标与系统不变量
+
+#### 产品指标
+
+| 指标 | 口径 |
+| --- | --- |
+| 补货完成率 | 打开新增批次后成功提交的唯一动作数 ÷ 开始补货会话数 |
+| 盘点修正率 | 发生过 adjustment 的活跃批次数 ÷ 被打开过详情的批次数；先测基线，不以越低越好 |
+| 库存不足阻塞率 | 因无法完整分配而失败的 intake ClientAction 数 ÷ 全部摄入提交动作数 |
+| 低库存恢复时间 | 首次进入 low/depleted 到成功新增可用批次的时长 |
+| 风险解释使用率 | 打开库存/有效期计算依据的会话数 ÷ 展示风险的会话数 |
+| 账本不一致率 | 审计发现 projection 与事件回放不一致的批次数 ÷ 已审计批次数；目标 0 |
+| 精确撤销正确率 | 撤销后原 allocation 全部且只补偿一次的成功数 ÷ 撤销成功数；目标 100% |
+
+#### 必须满足的不变量
+
+- 每个批次投影余额等于其有效库存事件 delta 之和，且不得小于 0。
+- 产品 onHandQuantity、expiredQuantity 和 autoAllocatableQuantity 均由同一批次集合派生。
+- intake allocation 总和等于 intake quantity；库存不足时不得留下 intake、allocation 或部分事件。
+- 自动 FEFO 不选择已过期或 voided 批次；unknown 有效期始终排在已知未过期批次之后。
+- 同一批次同一事实版本的 FEFO 顺序在设备间稳定。
+- 撤销只补偿原 allocation 且每笔最多一次，不改变计划状态。
+- 补货、调整和作废使用稳定 ClientActionId；重试不能重复改变库存。
+- 历史补录的 intake occurredAt 与库存 postedAt 分别保存；补录不能重排既有后续 allocation。
+- stockState 和 riskState 是派生值；任何库存写入不能自动暂停、恢复或删除计划。
+- 风险计算失败、有效期 unknown 或超出预测范围时必须返回原因状态，不能降级为 safe。
+- 所有数量使用服务端固定精度；前端浮点显示误差不能进入账本。
+
+### 10.19 验收标准
+
+- Given 同产品有到期日 2026-12-31 的 3 粒和 2027-12-31 的 5 粒，When 记录 5 粒，Then allocation 为前批 3 粒、后批 2 粒，事务一次提交。
+- Given 两个批次有效期相同但 receivedAt 不同，When 自动分配，Then 先使用较早收到的批次；再相同则按 createdAt 和 ID 稳定排序。
+- Given 已知未过期批次与 unknown 批次并存，When 自动分配，Then 已知未过期批次优先，unknown 最后。
+- Given 已过期批次仍有数量且另有未过期批次，When 自动记录，Then 不使用过期批次。
+- Given 用户明确选择过期批次记录实际来源，When 二次确认，Then 保存 manual allocation 和 expired_batch_override；计划和风险仍不被改写为 safe。
+- Given 总可自动分配量小于请求量，When 提交 intake，Then 整笔失败，所有批次余额、事件和记录均不变。
+- Given 补货请求网络超时后重试，When ClientActionId 和内容相同，Then 只新增一个批次和一条 restock 事实。
+- Given 同一补货 ClientActionId 改了数量再次提交，Then 返回幂等冲突，不复用第一次成功结果。
+- Given paused 产品新增批次，When 提交成功，Then 库存和风险重算，但 planState 仍为 paused。
+- Given active 产品库存归零，When 查看计划和今日，Then stockState=depleted、occurrence 仍存在并标记无库存，planState 仍为 active。
+- Given 用户盘点某批次从 10 改为 7，When 提交，Then 写 adjustment_decrease=-3、原因和 balanceAfter=7，不改 receivedQuantity。
+- Given 用户打开盘点页时余额为 10，另一设备先扣到 8，When 第一台提交“实际 7”，Then 返回版本冲突和最新余额，不直接写 -3。
+- Given 用户误建且从未被分配/调整的批次，When 作废，Then 写反向事件、余额归零、批次变 voided，历史仍可查看。
+- Given 批次已有 intake allocation，When 用户尝试作废，Then 被拒绝并引导做盘点调整。
+- Given 一条 intake 跨两个批次，When 撤销，Then 两批分别恢复原 allocation，重复撤销不再次增加余额。
+- Given intake 之后做过盘点再撤销该 intake，Then 原 allocation 仍精确补偿，旧盘点保留，页面提示重新盘点。
+- Given 用户今天补录上月 intake，When 保存，Then intake occurredAt 在上月、库存 postedAt 为今天，使用今天提交时的 FEFO，既有后续 allocation 不变化。
+- Given 未来计划有不同数量的多个 doseSlot 和下月生效的新版本，When 预测库存，Then 逐 occurrence 使用对应版本数量，不能用当前日均量简单相除。
+- Given 库存只能完整覆盖 4 个未来计划日且阈值为 7，When 查看产品，Then stockState=low，并同时显示首次不足的日历时点。
+- Given 产品计划暂停，When 查看预测，Then calculationState=paused；过期风险仍根据时间推进，不显示虚假预计用完日。
+- Given 未来 10 年内库存仍不会耗尽，When 预测，Then 返回 beyond_horizon，不伪造 10 年后的耗尽日。
+- Given 批次有效期为 `03/2027`，When 展示和计算，Then 保留 month 精度、显示具体日未知，提醒使用区间早界，过期判定不早于区间晚界。
+- Given 某批次预计在有效期后仍有余额，When 查看风险说明，Then 标为 unfinishable，并展示该批次、预计余额、计划版本和计算时间。
+- Given 只有 unknown 有效期批次，When 查看风险，Then riskState=unknown，不显示“可在有效期前用完”。
+- Given 账本事件回放与 current projection 不一致，When 审计发现，Then 标记 reconciliation_required、阻止自动分配并告警，不静默选一个数覆盖。
+
+### 10.20 本模块确认点
+
+本模块建议冻结以下产品判断：
+
+1. 库存以批次事件账本为权威，current 只是物化投影；产品总余量禁止直接编辑。
+2. 自动 FEFO 使用“有效期结束边界 → receivedAt → createdAt → ID”，unknown 最后，已过期批次排除；真实来源可由用户显式手工指定。
+3. 历史补录按历史 occurredAt 展示，但库存按提交时 postedAt 和当时余额入账，不重排已经发生的后续 allocation。
+4. 库存调整采用批次级“盘点到实际余额”并保留原因、版本和补偿事件；新购入库存必须新增批次。
+5. 撤销始终精确补偿原 allocation；若之后做过盘点则提示重新核对，但不吞掉恢复量或修改旧事件。
+6. 低库存阈值继续使用“可完整覆盖的未来计划服用日数”，同时展示逐 occurrence 算出的首次不足日历时点；不再写成含糊的自然日倒计时。
+7. 有效期风险按批次模拟；day/month/year/unknown 保留原精度，unknown 不等于 safe，风险计算失败也不默认安全。
+
+请确认模块 10。确认后，模块 11 将定义批次价格、单位成本、实际消耗成本、退款/调整、累计花费和库存价值口径。

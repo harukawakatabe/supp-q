@@ -6680,3 +6680,312 @@ flowchart TD
 8. 只有真实域名/依赖、告警、备份恢复、provider、canary、删除和证据包全部通过，才能称 `PRODUCTION_ACCEPTED`。
 
 请确认模块 18。确认后，模块 19 将只做风险台账、待决事项、负责人/截止门槛、全文一致性检查和最终验收索引，不再新增功能范围。
+
+## 19. 风险、待决事项与最终自检
+
+### 19.1 模块目的与最终结论
+
+本模块不增加功能，不改变模块 1–18 已确认的产品、数据、安全或发布合同。它只回答五个收口问题：
+
+1. 哪些决定已经冻结，开发时不得重新解释。
+2. 哪些早期状态标签已经被后续确认或细化覆盖。
+3. 哪些事项仍未决定、由谁负责、最迟在哪个 Gate 前关闭。
+4. 哪些风险可能让“功能看起来可用”但产品事实、隐私或生产状态不可信。
+5. 如何从需求追到数据、测试、指标和发布证据，避免实现完成后才发现漏验。
+
+最终判断分三层，不能混用：
+
+| 层级 | 本 PRD 完成后的状态 | 含义 |
+| --- | --- | --- |
+| 产品合同 | 当前 `MODULE_19_PENDING_CONFIRMATION`；确认后 `CONTRACT_READY` | 完整产品思想、R1–R4 顺序、业务规则、数据/权限、非功能要求与验收口径已经可实施 |
+| 实现 | `PARTIALLY_IMPLEMENTED` | 当前 Uni 只有 Launch RC 底座和部分闭环；模块 5–18 的目标差距仍需按批次实现、迁移和验证 |
+| 生产 | `NOT_DEPLOYED` | 没有生产环境或真实生产用户；只有 RG0–RG9、Canary 和真实外部证据通过后才可变为 `PRODUCTION_ACCEPTED` |
+
+因此，模块 19 确认后可以进入正式实施拆解，但不能据此对外声称完整产品已经开发完成或上线。
+
+### 19.2 最终裁决顺序
+
+当不同位置的文字看似冲突时，按以下顺序裁决：
+
+1. 用户在模块确认后的明确新决定，以及 `_append-log.md` 的确认状态。
+2. 本模块的状态 reconciliation 和模块 15–18 的统一合同。
+3. 对应功能模块 5–14 的具体业务规则。
+4. 模块 1–4 的背景、目标、范围与体验原则。
+5. `uni/shaping/` 已确认材料。
+6. 当前 Uni 代码/历史文档，只证明现状，不自动修改目标。
+7. MVP/Web 作为完整思想和视觉/交互参考，不作为生产工程事实。
+
+后出现的细化只可澄清同一已确认意图，不能静默扩张范围。若确实改变用户行为、数据语义、权限、成本或上线标准，必须走 19.13 的变更控制。
+
+### 19.3 已冻结且不得重新开放的决定
+
+| 编号 | 冻结决定 | 实施含义 |
+| --- | --- | --- |
+| FD-01 | MVP 是完整产品思想，不是待删减的原型范围 | R1–R4 是依赖顺序，不是把 R2–R4 永久移出范围 |
+| FD-02 | `uni/` 是唯一正式实现和验收路径 | MVP/Web 只提供产品和视觉参考，不继续形成第四套业务事实 |
+| FD-03 | 视觉采用 MVP/Web 的信息密度与风格方向 | 由 Uni 补齐触控、响应式、无障碍、权限、异步和真实状态，不逐行复制旧前端 |
+| FD-04 | 产品只管理补剂 | 无 OTC/处方药新建、编辑、提醒、今日、AI 或假入口；旧枚举只做迁移隔离 |
+| FD-05 | AI 是补剂资料助手 | 不给个性化用量、开始/停止、诊断、治疗、安全性或相互作用结论，不写确定性核心事实 |
+| FD-06 | H5 是当前第一正式载体 | 微信小程序和外部通知属于 R4；未验证前不展示可操作假入口 |
+| FD-07 | 一级导航为“记录 / 计划 / 添加 / 成分 / 补剂柜” | “今日”是记录域的默认日期视图；账户/设置不占底栏 |
+| FD-08 | Demo 直达且每位访客隔离 | Demo 24 小时无活动后清理，不共享可写账号，也不迁移到注册账户 |
+| FD-09 | R1–R3 真实账户采用邀请制 | 已有账户可登录；公开自助注册需新的商业、滥用、成本和隐私评审 |
+| FD-10 | 识别只生成候选，人工确认才形成事实 | 三槽可独立上传/跳过/手填；识别失败不能阻断手工核心路径 |
+| FD-11 | 计划、记录、库存、成本和成分各有单一事实来源 | 页面、AI、投影和埋点不得各自重算另一套业务规则 |
+| FD-12 | R1 只提供服务端持久化站内提醒 | doseSlot 时间不等于通知授权；外部 delivered/read 不能伪造 |
+| FD-13 | 当前工作区是单所有者 | `member` schema 预留不构成协作能力；Admin 不获得用户内容读取权 |
+| FD-14 | R1 成本基准币种为 CNY | unknown 不等于 0；不接实时汇率改写历史，外币未确认换算时单列 |
+| FD-15 | 不做电商、支付、订阅、家庭协作或专业端 | 旧页面/枚举/接口残留不得作为恢复这些范围的依据 |
+| FD-16 | R1 不做离线自动写队列 | 离线草稿不是成功事实；恢复网络后刷新版本并由用户确认提交 |
+
+### 19.4 历史标签与当前权威状态 reconciliation
+
+| 项目 | 早期文字 | 当前权威解释 | 最终状态 |
+| --- | --- | --- | --- |
+| R1–R3 邀请制 | 5.3 标为 `DRAFT` | 模块 5 确认后已接受 Demo 直达、真实账户邀请制 | `APPROVED_TARGET` |
+| 三槽输入方式 | 6.1 标为 `DRAFT` | 模块 6 确认后，拍照/相册/截图/手工可混合，三个槽不强制凑齐 | `APPROVED_TARGET` |
+| 草稿与原子确认 | 6.1 标为 `DRAFT` | 未完成保留 Draft；确认事务原子创建目标事实，失败不生成半产品 | `APPROVED_TARGET` |
+| M1–M10 | 模块 3 多项标 `DRAFT` | 模块 17 已冻结定义、窗口、分母、排除和 metricVersion；真实目标值仍不得编造 | 定义 `APPROVED_TARGET`；数值 `UNMEASURED` |
+| “记录/今日” | 早期多处简称“今日页” | 一级入口叫“记录”；今天是默认视图，历史/补录属于同一记录域 | `APPROVED_TARGET` |
+| “active 产品” | 模块 10 等早期便利用语 | 计划语境一律解析为 `planState=active`；还需满足 catalog 未归档/删除。库存和风险另读各自状态 | `APPROVED_TARGET` |
+| 提醒时间 | 旧字段 `reminder_times[]` | 迁移为 doseSlot.localTime；ReminderPreference=`needs_confirmation`，不推定已授权提醒 | `APPROVED_TARGET` |
+| depleted | 旧单字段状态 | 只解析为 `stockState=depleted`；不暂停 planState、不删除 occurrence | `APPROVED_TARGET` |
+| OTC/prescription 枚举 | 当前 schema/旧数据可能存在 | 不是产品能力；新写拒绝，旧行进入 `unsupported_legacy`，无普通 UI/AI/今日入口 | `NOT_IN_SCOPE` + migration quarantine |
+| “已验证” | 历史本地测试、Fake、synthetic | 只对应固定版本和环境；不得升级为目标实现或生产证据 | `VERIFIED_LOCAL` 或更低，不是 `PRODUCTION_ACCEPTED` |
+| 模块 18 Gate 快照 | 写入时 M18 待确认、M19 未完成 | 用户说“继续”即确认 M18；M19 确认后 RG0 的“PRD 模块确认”子项才可关闭 | 本模块待最终确认 |
+
+未在本表列出的术语按模块 0、15、16 的命名空间、版本和数据权威解释。实现不得保留一个无命名空间的通用 `status` 供多个领域共同读写。
+
+### 19.5 负责人角色与签字规则
+
+本 PRD 不虚构具体姓名。实施启动时必须把以下角色映射到真实责任人或服务账号：
+
+| 角色 | 最小责任 | 不可替代的签字/证据 |
+| --- | --- | --- |
+| Product Owner（PO） | 范围、批次、用户行为、开放项和发布取舍 | PRD/ChangeSpec、Pilot 范围、产品验收 |
+| UX/Content Owner（UX） | 导航、状态、可访问性、风险/AI/删除文案 | Visual Review、键盘/reader 和关键文案验收 |
+| Engineering Lead（EL） | 架构、API、迁移、事务、性能和可回滚性 | schema/OpenAPI、迁移报告、技术发布批准 |
+| Domain/Data Owner（DD） | 计划、库存、成本、成分、时区与指标口径 | Q1–Q3/Q9 对账、MetricDefinition 和数据异常裁决 |
+| Security & Privacy Owner（SP） | 身份、租户、第三方、保留、删除和敏感操作 | Q4/Q8、安全测试、processor/隐私/删除核对 |
+| Recognition/AI Owner（ML） | provider、数据集、模型、策略、引用、质量和预算 | 识别门禁、Q5–Q7、Gold Set、provider 变更批准 |
+| QA & Release Owner（QA） | 测试矩阵、证据真实性、Gate 状态和回归 | RG0–RG9 evidence pack、skip/N/A 审批 |
+| Operations Owner（OPS） | 生产依赖、告警、值班、备份、恢复和事故 | readiness/alert/restore/canary/incident 证据 |
+
+同一人可以兼任多个角色，尤其在个人项目阶段；但 evidence pack 必须记录其按哪个角色作出判断。同一人自测不可以被表述为“独立安全审计”或“独立用户验收”。自动化账号只执行任务，不能替代 PO、SP、QA 或事故负责人的判断。
+
+### 19.6 待决事项登记册
+
+| ID | 待决事项 | 默认状态/约束 | 负责角色 | 最迟关闭点 | 不关闭的处理 |
+| --- | --- | --- | --- | --- | --- |
+| OD-01 | 各负责人具体姓名、备用联系人和升级路径 | 当前只有角色，没有真实排班 | PO | R1 RG0 | 不进入正式实施发布承诺 |
+| OD-02 | “小补Q / Supp Q”公开品牌、域名和对外主体 | 继续作为工作名，不做公开品牌声明 | PO + SP | R1 RG6 前 | 仅内部/受控 Pilot 名称 |
+| OD-03 | 生产供应商、区域、网络和服务器规格 | 不从 Compose 可运行推断实际选择 | EL + OPS + SP | RG7 | 不创建 Production Canary |
+| OD-04 | PostgreSQL、私有对象存储及权限/PITR 方案 | 必须满足模块 18 RPO/RTO 和删除合同 | EL + OPS + SP | RG7 | RG2/RG7 保持失败 |
+| OD-05 | SMTP 供应商、From 域名、退信与限额 | 不绕过验证码或邀请身份 | OPS + SP | R1 RG6 | 真实账户登录/注册不开放 |
+| OD-06 | Recognition provider/model/quota/处理地/保留/训练条款/价格 | Fake 与 12 图历史证据均不足 | ML + SP + PO | R1 RG6 | 仅手工建档或受控非生产评测 |
+| OD-07 | 30–50 张真实标签授权集及语言/槽位覆盖 | 原图不进 Git/普通 CI；授权逐图记录 | ML + SP + QA | R1 RG6 | 识别 live capability 关闭 |
+| OD-08 | 监控平台、告警接收、值班与 runbook owner | dashboard 不等于告警 | OPS + QA | RG7 | 不进入 RG8 Canary |
+| OD-09 | 异地备份目的地、age key、PITR 和 restore drill 排期 | 30 日滚动、RPO≤1h、RTO≤4h | OPS + SP | RG7 | 不进入 RG8 Canary |
+| OD-10 | 隐私说明、服务条款、processor 清单、AI/识别披露与内容标识核验 | 以实际供应商和数据流为准 | SP + PO | 对应 capability 的 RG6 | 关闭对应外部 capability |
+| OD-11 | optional analytics 是否启用及用户选择交互 | 默认 `analyticsMode=minimal` | PO + SP + DD | optional 事件首次生产启用前 | 保持关闭，不影响核心业务 |
+| OD-12 | M1–M10 数值目标 | 先满足 4 周/30 eligible user-week 与数据完整度 | PO + DD | 基线门槛满足后的下一次目标评审 | 继续 `UNMEASURED/directional_only`，不伪造 KPI |
+| OD-13 | R3 文本 AI provider/model/目的地/预算/ReferenceFact 集 | 与识别配置和授权完全独立 | ML + SP + PO | R3 RG6 | AI 入口保持 unavailable，手工笔记继续 |
+| OD-14 | R4 外部通知渠道和微信载体 | 当前没有假开关、假 delivered 或小程序承诺 | PO + EL + SP | R4 RG0/RG6 | R4 不启动；R1–R3 站内能力不受影响 |
+| OD-15 | 是否以及何时开放自助注册、商业化或套餐 | 当前均不在 R1–R3 范围 | PO + SP + OPS | 扩大到非邀请用户前 | 继续邀请制，不新增支付/套餐 |
+| OD-16 | 旧库 OTC/prescription 行的实际数量与逐条处置 | 未盘点前不假设为 0；只能隔离、导出、删除/人工审查 | DD + SP + QA | R1 migration cutover | 有未解释行则 RG2 失败 |
+
+待决事项只能通过可引用的决定或证据关闭，不能用“暂时先这样”“代码默认值”或未记录的口头约定关闭。改变 FD-01–FD-16 的答案不是关闭开放项，而是正式范围变更。
+
+### 19.7 风险分级与接受原则
+
+| 等级 | 含义 | 发布处理 |
+| --- | --- | --- |
+| Critical | 可能造成跨租户、重复核心副作用、账本错误、删除残留或越界 AI 等 P0 | 不可豁免；阻断写入/能力与发布，保全证据并修复 |
+| High | 会使核心闭环、生产恢复、识别质量、隐私或可访问性不可接受 | 原则上阻断对应 release；例外必须有 owner、期限、明确受限 cohort 和补偿 |
+| Medium | 不破坏核心事实，但会降低理解、效率、成本控制或运营质量 | 可带入受控小范围，但必须可见、有 owner 和到期点 |
+| Low | 不影响合同正确性和当前批次价值 | 进入普通 backlog，不伪装为紧急风险 |
+
+Q1–Q9、安全/删除、目标迁移对账和 RG6 数据授权不接受“先上线观察”。任何风险接受都必须写明 scope、理由、证据、到期时间和自动失效条件；不能永久豁免，也不能跨 release 自动继承。
+
+### 19.8 风险台账
+
+| ID | 等级 | 风险与触发信号 | 预防/硬门禁 | 发生后的处置 | Owner |
+| --- | --- | --- | --- | --- | --- |
+| RK-01 | High | 完整 MVP 思想再次被缩成当前 Uni 页面，R2–R4 被误写成“不做” | FD-01、功能差距矩阵、R1–R4 traceability | 停止范围验收，补回被删除目标并重做影响评审 | PO |
+| RK-02 | High | 旧药品枚举、旧文案或模型能力重新产生处方药/个性化建议入口 | FD-04/05、API 枚举拒绝、UI/AI Gold Set | 关闭入口/provider，隔离数据，按范围变更重新评审 | PO + SP + ML |
+| RK-03 | High | health 200、Fake、截图或历史测试被当成生产上线 | 状态词汇、RG0–RG9、same-digest evidence pack | 立即纠正对外状态；补齐缺失 Gate，不用声明代替证据 | QA + PO |
+| RK-04 | Critical | 四维状态或版本迁移错误，历史/未来计划被重写 | Expand–Backfill–Verify、shadow read、时区/版本抽样 | 停 cutover；回旧兼容 artifact 或前向修复，不自动 down | EL + DD + QA |
+| RK-05 | Critical | 库存、allocation、撤销或成本快照不一致 | Q1–Q3、事务/幂等、回放对账、migration invariant | 冻结相关写入，保全账本，补偿并全量重放 | DD + EL |
+| RK-06 | Critical | 跨租户、Admin 越权、私有文件/导出可枚举 | Q4、Scope 强制、IDOR/文件/任务/导出测试、step-up | 吊销会话/凭据、阻断能力、按安全事故处置 | SP + EL |
+| RK-07 | Critical | 删除标 completed 后仍有 DB、对象、导出、第三方或可回溯事件 | Q8、对象优先清理、provider/backup 窗口核对 | 状态退回 deleting/failed，阻断访问，重试清理并核对 | SP + OPS |
+| RK-08 | High | 识别在真实标签上低准确或假高置信，却因 task succeeded 上线 | 30–50 图全门槛、人工确认、Fake/live 隔离 | 关闭 live recognition，保留手工建档，修模型/数据再全量评测 | ML + QA |
+| RK-09 | High | AI 绕过 preflight、引用或只读工具，输出剂量/诊断/相互作用裁决 | Q6/Q7、policy gate、Gold Set、output check、tool allowlist | 关闭对应能力/provider，保留运行证据，修复后全量回归 | ML + SP |
+| RK-10 | High | Provider 目的地、保留、价格或条款变化却沿用旧授权 | disclosureVersion、allowlist、ChangeSpec、RG6 重开 | 停止新调用，重新披露/授权/评测，不静默换源 | SP + ML + PO |
+| RK-11 | High | 指标事件缺失、Demo/Fake 混入或分母变化制造虚假增长 | MetricDefinition/version、事实对账、cohort 排除、UNMEASURED | 撤回错误结论，重算新 revision 并说明影响 | DD + PO |
+| RK-12 | High | 无真实告警、异地备份或 restore drill，但服务已接流量 | RG5/RG7、alert delivery、RPO/RTO drill | 停止扩波或只读降级；建立恢复能力后再晋级 | OPS + QA |
+| RK-13 | High | 旧 H5/Worker 与新 schema 不兼容，缓存客户端写错语义 | N/N-1、expand first、hashed asset/no-cache index、contract 延后 | 关 capability/回兼容 artifact，保留旧结构并前向修复 | EL + QA |
+| RK-14 | High | iOS Safari、窄屏、200% 或 reader 无法完成主链 | RG4、支持矩阵、axe + 键盘 + 真实 reader | 阻断对应支持声明和 R1 晋级，修复后重跑主链 | UX + QA |
+| RK-15 | Medium | 站内 available 被写成外部 delivered，提醒噪音反而破坏信任 | channel capability、事件状态机、M8/噪音指标 | 关闭对应提醒类型、修正状态与文案，不删除核心事实 | PO + DD |
+| RK-16 | High | Provider 并发/Token/图片调用使成本或 quota 失控 | 持久预算、80% warning/100% hard block、billable unknown 不盲重试 | 阻断新外部调用，保留手工核心路径并对账账单 | ML + OPS |
+| RK-17 | High | CI 文件未在真实仓库根生效，制品、SBOM 或扫描证据不可重复 | RG1、branch protection、immutable digest、same artifact promotion | 禁止发布，修复流水线并重建全部证据 | EL + QA |
+| RK-18 | Medium | 19 模块规模导致跨域并行、重复实现或依赖倒置 | R1–R4 顺序、模块 15/16 合同、workstream Definition of Ready | 停止下游功能，先冻结上游 contract 和 migration | PO + EL |
+
+### 19.9 需求追踪矩阵
+
+| 能力域 | 产品/体验定义 | 权威规则/数据 | 指标/验收 | 发布 Gate |
+| --- | --- | --- | --- | --- |
+| 用户、范围与分批 | 1–3 | 3.9–3.12 | 主指标、M1–M10、Q1–Q9 | RG0；各 R1–R4 |
+| 视觉、导航与页面状态 | 4 | 15.19–15.20 | 4.13–4.16、RG4 | RG4/RG7/RG8 |
+| 身份、Demo、导出与删除 | 5 | 16.4、16.7、16.19–16.23 | 5.16、Q4/Q8、17.10/17.18 | RG3/RG6/RG8/RG9 |
+| 三槽建档与识别 | 6 | 15.16、16.8、16.13 | 6.15–6.16、Q5、Provider Eval | RG3/RG6/RG7 |
+| 补剂柜与产品生命周期 | 7 | 15.5、15.18、16.8 | 7.16–7.17、17.11 | RG3/RG4 |
+| 计划与 occurrence | 8 | 15.6、15.12、16.9 | 8.19–8.20、M2/M5 | RG2/RG3/RG4 |
+| 今日、补录、临时记录与更正 | 9 | 15.6–15.11、16.9/16.14 | 9.16–9.17、Q3、M2/M6 | RG3/RG4 |
+| 库存、FEFO、撤销与风险 | 10 | 15.7–15.11、16.9/16.14 | 10.18–10.19、Q1/Q2、M8 | RG2/RG3/RG5 |
+| 成本 | 11 | 16.9/16.14、18.14 | 11.19–11.20、成本完整度/对账 | R2 RG2/RG3/RG5 |
+| 成分、手工记录与导出 | 12 | 16.10、16.14–16.15 | 12.21、Q9、M9 | R2 RG3/RG4/RG5 |
+| 站内提醒 | 13 | 15.13–15.17、16.10/16.15 | 13.20–13.22、M8、queue/outbox | RG3/RG5 |
+| 笔记与补剂 AI | 14 | 16.6/16.10/16.15/16.20 | 14.21–14.24、Q6/Q7、M10 | R3 RG3/RG5/RG6 |
+| 跨模块一致性 | 15 | 15.2–15.22 | 15.23、Q1–Q9 | RG2/RG3/RG5 |
+| API、权限、隐私生命周期 | 16 | 16.4–16.25 | 16.26、权限矩阵/删除核对 | RG0/RG2/RG3/RG6 |
+| 埋点、运营与可观测性 | 17 | 17.3–17.30 | M1–M10、Q1–Q9、告警演练 | RG3/RG5/RG7–RG9 |
+| 迁移、NFR 与生产发布 | 18 | 18.4–18.30 | 18.32、RG0–RG9、Wave 0–3 | 全部 Gate |
+
+每个实施工单至少引用一行能力域、一个具体小节和一条验收/不变量。只有 UI 截图而没有服务端/数据/失败合同的工单不满足追踪要求。
+
+### 19.10 最终验收索引
+
+| 验收层 | 必须查看 | 通过含义 | 不能替代 |
+| --- | --- | --- | --- |
+| 产品范围 | 3.8–3.12、19.3 | 完整范围与批次顺序一致 | 代码当前已有页面 |
+| 交互与内容 | 4、各功能页面/状态/验收节 | 成功、空、等待、失败、冲突和降级均可理解 | 静态 happy-path 截图 |
+| 领域正确性 | 8–15、Q1–Q3/Q9 | 计划、账本、版本、单位和补偿一致 | 单元测试覆盖率百分比 |
+| 身份与隐私 | 5、16、Q4/Q8 | 租户、授权、发送、导出、删除可证明 | 难猜 ID、前端隐藏或隐私文案 |
+| 识别 | 6、17.23、18.21/18.23 | 授权真实集质量、人工确认和失败兜底通过 | Fake/synthetic/12 图历史连通 |
+| AI | 14、Q6/Q7、R3 RG6 | preflight、引用、只读、拒答、真实 provider、费用/删除通过 | Prompt 看起来安全或 Mock 回复 |
+| 数据与 API | 15–16、18.13–18.18 | schema/API/事件/迁移兼容并完成对账 | migration exit 0 或 OpenAPI 文件存在 |
+| 指标与运营 | 17、19.4/19.6 | 口径可重放、排除正确、owner/告警/审计可用 | 页面 PV、日志数量或无样本百分比 |
+| 非功能 | 18.5–18.13、18.20–18.22 | 性能、容量、可用性、安全、兼容、无障碍和供应链达标 | 本机响应快或 Chromium 单浏览器通过 |
+| 恢复与发布 | 18.23–18.30 | 同 digest、真实依赖、restore、canary、回滚和值班证据完整 | 服务进程启动、health 200 或已 push |
+
+模块 5–18 已给出 306 条 GWT 验收语句；它们是需求示例和边界，不是把每条机械转换成一个 UI 测试。QA 必须把同类语句映射到单元、属性、集成、合同、E2E、安全、评测或人工证据，未映射项保持 open。
+
+### 19.11 分批实施的 Definition of Ready / Done
+
+#### Definition of Ready
+
+一个 capability 进入实现前必须同时具备：
+
+- 所属 R1–R4 和 feature flag/cohort 已知。
+- 对应 PRD 小节、数据对象/API、状态和权限已引用。
+- 成功、失败、空、等待、并发、撤销/删除或不适用原因已覆盖。
+- 上游 migration、provider、ReferenceFact、设计或外部决定已关闭，或有明确不可启用策略。
+- 实施 owner、测试 owner、风险和 Gate 已登记。
+- 任何真实外部调用已说明数据、目的地、用途、保留和费用，并获得适用授权。
+
+#### Capability Done
+
+能力只有在代码、migration、OpenAPI、测试、可观测性、错误/降级、隐私生命周期、用户文案和 runbook 同时完成后，才可称 `IMPLEMENTED_UNVERIFIED` 或更高；合并代码不等于 Done。
+
+#### Release Done
+
+对应 release 的适用 RG0–RG9、same-digest staging/production、Canary、删除/恢复和 evidence pack 全部通过，才可称该批次 `PRODUCTION_ACCEPTED`。Deferred 能力必须隐藏或显示真实不可用状态，不能用假入口补足“页面完整”。
+
+### 19.12 实施顺序与依赖硬边界
+
+| 顺序 | 必须先完成 | 才能开始/开放 | 禁止并行假设 |
+| --- | --- | --- | --- |
+| 1 | 模块 15/16 目标 schema、状态、API、权限和 migration skeleton | R1 各功能开发 | 先按旧单 status 做页面，后面再迁移 |
+| 2 | ClientAction、事务、计划/库存/撤销不变量 | 今日、补录、补货和提醒 | 前端各自模拟成功与库存变化 |
+| 3 | 三槽 Draft/Slot/Job/Evidence 和人工确认合同 | live recognition | 先接 provider 再补证据、版本和授权 |
+| 4 | R1 核心事实、投影、删除、站内提醒和 RG1–RG7 | R1 Canary | 用 R2/R3 页面掩盖 R1 正确性缺口 |
+| 5 | R1 生产事实稳定与版本可追溯 | R2 成本/成分/导出/笔记 | 在旧事实模型上另建第二套聚合 |
+| 6 | R2 只读事实工具、ReferenceFact、policy/授权/预算/评测 | R3 AI | 让模型拥有写权限或用 prompt 代替策略门 |
+| 7 | 站内提醒正确、外部权限/渠道真实验证、新端适配合同 | R4 | 提前展示 Web Push/微信假开关或假 delivered |
+
+### 19.13 需求变更控制
+
+PRD 最终确认后的请求按四类处理：
+
+1. **缺陷/勘误**：实现或文字违反已确认合同；直接修复并链接原规则，不改变范围。
+2. **实现细化**：不改变用户行为、事实、权限、成本或 Gate；可在设计/技术说明中补充。
+3. **外部决定关闭**：更新 OD 项及证据，不顺带扩大能力。
+4. **范围/合同变更**：必须创建 ChangeSpec，说明用户问题、受影响模块、数据迁移、API/权限、隐私/provider、指标、测试、兼容、发布和回滚；获得用户确认后才修改已确认规则。
+
+以下一律属于第 4 类：恢复处方药/药品入口、让 AI 给个性化用量或相互作用结论、开放多人协作/公开注册/支付、改变计划/库存/成本事实、发送新的敏感数据类别、静默更换 provider、放宽 Q1–Q9、改变删除或保留承诺。
+
+ChangeSpec 不能只写 UI 差异。旧客户端、历史数据、导出、埋点、证据和已有授权都要说明如何兼容；无法说明时不得合并。
+
+### 19.14 最终 GWT 验收
+
+- Given 模块 5/6 的早期 `DRAFT` 已被用户逐模块确认，When 开发读取这些段落，Then 按 19.4 的 `APPROVED_TARGET` 实施，不重新请求同一产品决定。
+- Given M1–M10 的定义已经冻结但没有真实基线，When 展示仪表盘或汇报结果，Then 使用 `UNMEASURED/directional_only`，不填入目标百分比或声称改善。
+- Given 文档写“active 产品”，When 实现状态判断，Then 解析为对应命名空间状态，不新增共享 `status=active`。
+- Given 一级底栏显示“记录”，When 用户打开默认页，Then 可以看到今日视图并进入历史/补录；不再出现独立且重复的“今日”和“服用记录”一级入口。
+- Given 旧 schema 有 OTC/prescription 行，When R1 迁移与普通查询，Then 行被隔离并可受控处置，普通 UI/API/AI/提醒/今日均不可使用。
+- Given 某 R2–R4 能力尚未实现，When 发布较早批次，Then 保留完整范围追踪但隐藏入口或显示真实 unavailable，不用假开关制造完成感。
+- Given 某人兼任 PO、QA 和 OPS，When 签署 evidence pack，Then 分角色记录判断，不把自测表述为独立审计。
+- Given OD-01 没有真实负责人和升级路径，When 评审 RG0，Then PRD 内容可评审但正式发布责任门禁不通过。
+- Given Recognition provider 未完成 OD-06/OD-07，When 手工建档已通过，Then 可继续核心实现，但 live recognition capability 和 R1 RG6 仍关闭。
+- Given AI provider 或 ReferenceFact 未关闭 OD-13，When R1/R2 发布，Then 不影响确定性核心和手工笔记；R3 入口保持不可用。
+- Given 用户要求新增处方药、自动建议剂量或多人共享，When 评估请求，Then 创建范围 ChangeSpec，不把旧枚举或已有 member 字段当作已批准依据。
+- Given 代码、截图和本地测试全部通过，When 没有 staging/真实依赖/restore/canary 证据，Then 状态最高为 `VERIFIED_LOCAL`，不能称上线。
+- Given 同一 artifact 的一个 Gate 失败，When 其他 Gate 通过，Then 该 release 不晋级；不能用平均通过率抵消 Critical/High 阻断项。
+- Given 测试报告来自不同 commit、环境或 Fake 数据，When 组装 evidence pack，Then 明确标历史/不适用，不用于关闭当前真实 Gate。
+- Given 需求工单只有页面描述，When 没有关联数据、权限、失败、指标或验收，Then 不满足 Definition of Ready。
+- Given 产品实现了主路径但未实现删除、导出、降级、告警或回滚，When 评审 Capability Done，Then 仍为未完成。
+- Given 基线达到 4 周/30 eligible user-week，When 讨论产品目标，Then 由 PO/DD 基于分布和不确定性关闭 OD-12，不回填一个事先猜测数字。
+- Given 模块 19 最终确认，When 更新项目状态，Then 只把产品合同标 `CONTRACT_READY`；实现与生产状态继续按代码和 RG 证据独立更新。
+
+### 19.15 本模块最终确认点
+
+本模块建议最终冻结以下收口判断：
+
+1. 模块 1–19 共同组成小补Q完整产品合同；R1–R4 是交付顺序，不缩减最终功能思想。
+2. 产品只做补剂，无处方药或不可用药品入口；旧 OTC/prescription 数据仅隔离迁移。
+3. 历史 `DRAFT` 的邀请制与三槽规则已因模块确认转为 `APPROVED_TARGET`；M1–M10 仅数值目标保持 `UNMEASURED`。
+4. 当前 PRD 可以进入实施拆解，但当前 Uni 仍是部分实现、历史本地 RC、未部署生产。
+5. OD-01–OD-16 必须按对应 R1/R3/R4 Gate 关闭；没有具体姓名、外部供应商或真实证据时，不得自行补写答案。
+6. Critical 风险、Q1–Q9、授权、迁移对账和删除残留不可带病上线；其他风险接受必须限范围、带 owner 和到期日。
+7. 每个工单必须可追到模块、数据/API、验收和 Gate；每个 release 必须可追到同一 artifact 的证据包。
+8. 模块 19 确认只代表 `CONTRACT_READY`，不代表 `IMPLEMENTED`、`VERIFIED_STAGING` 或 `PRODUCTION_ACCEPTED`。
+
+请确认模块 19。确认后，19 模块 PRD 生成流程结束；下一步应另起实施拆解/技术设计与 R1 Gate 清单，不继续在本 PRD 末尾无边界追加功能。
+
+## 附：自检与待完善清单
+
+### A.1 全文一致性自检结果
+
+| 检查项 | 结果 | 说明 |
+| --- | --- | --- |
+| 产品目标与完整范围 | PASS | 用户问题、完整 MVP 思想和 R1–R4 一致；未把后续批次删除 |
+| 产品边界 | PASS | 只做补剂；处方药/药品入口、医学裁决、电商、协作和支付均未混入 |
+| 术语与导航 | PASS WITH RECONCILIATION | “补剂柜”已统一；记录/今日和 active 旧用语按 19.4 收口 |
+| 用户与权限 | PASS | Demo/注册 owner/Admin/Worker/provider 权限分离；member 未开放 |
+| 核心成功/失败/空/等待 | PASS | 模块 5–18 均覆盖，历史共 306 条 GWT；实施仍需建立证据映射 |
+| 状态机与跨模块传播 | PASS | 模块 15 统一命名空间、事务、幂等、版本、时区和补偿 |
+| 数据/API/隐私生命周期 | PASS | 模块 16 已给出目标对象、资源面、权限、文件/删除合同；尚待实现 |
+| 指标和运营 | PASS WITH OPEN BASELINE | 公式、窗口和排除已冻结；数值目标按 OD-12 保持 UNMEASURED |
+| NFR/迁移/发布 | PASS AS CONTRACT | 预算、迁移和 RG0–RG9 已定义；真实 staging/production 证据未执行 |
+| 外部依赖 | OPEN BY DESIGN | 域名、云、SMTP、provider、监控、备份和合规按 OD-02–OD-13 关闭 |
+| 当前实现状态 | PARTIAL | 不从 PRD 完整度推断代码完成；差距以各模块“当前实现与目标差距”为准 |
+| 生产状态 | NOT DEPLOYED | 没有真实生产环境或用户，不能称已上线 |
+
+### A.2 实施前必须建立的派生物
+
+- R1 capability/workstream backlog，逐项引用 19.9 和验收语句。
+- 目标 schema/OpenAPI/error registry/permission matrix 的版本化实现规格。
+- 当前 snapshot→目标 R1 的 migration inventory、quarantine 和 rehearsal plan。
+- 设计系统/页面状态/响应式/无障碍验收清单；继续由实际 UI 证据校验 MVP/Web 视觉方向。
+- Q1–Q9 自动/人工测试映射、真实标签评测计划和浏览器矩阵。
+- MetricDefinition registry、事件 schema、Demo/Fake/test 排除和基线报告模板。
+- OD-01–OD-16 owner/证据登记册、RK-01–RK-18 风险状态和 ChangeSpec 模板。
+- RG0–RG9 checklist、release evidence pack、runbook、rollback package 和 incident contact tree。
+
+这些是实施与发布派生物，不应倒过来修改本 PRD 的产品事实。若派生物发现合同无法实现或存在新风险，按 19.13 提交 ChangeSpec。
+
+### A.3 最终文档状态
+
+在用户确认模块 19 前：`MODULE_19_PENDING_CONFIRMATION`。
+
+在用户确认模块 19 后：`CONTRACT_READY / IMPLEMENTATION_PARTIAL / PRODUCTION_NOT_DEPLOYED`。此状态只说明需求合同已收口，所有实现、真实外部调用、迁移、测试和上线 Gate 仍必须用对应版本的实际证据单独关闭。

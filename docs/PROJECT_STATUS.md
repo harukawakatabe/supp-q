@@ -1,14 +1,21 @@
 # Project Status
 
-Last updated: 2026-08-21
+Last updated: 2026-09-19
 
 ## Direct conclusion
 
-`uni/` is a locally verified H5 release candidate, not a live production
-service. The code now contains the launch-beta product loop, deployment
+The complete product contract is now confirmed (`CONTRACT_READY`) and R1
+implementation planning is active. The code remains a locally verified H5
+Launch-Beta release candidate (`IMPLEMENTATION_PARTIAL`), not a live production
+service (`PRODUCTION_NOT_DEPLOYED`). The code contains the launch-beta product loop, deployment
 composition, health/metrics, cleanup, backup/restore tooling, and automated
 acceptance. Production promotion is blocked by owner-provided infrastructure
-and a real-label provider evaluation, not by a hidden Fake-provider claim.
+and a real-label provider evaluation, while complete R1 promotion is also
+blocked by the target schema/API/migration/UI/observability work in
+`IMPLEMENTATION_PLAN_R1.md`.
+
+The active product contract is `../prd/PRD.md`. The old Launch-Beta PRD and
+acceptance document are archived and no longer define the maximum scope.
 
 Confidence:
 
@@ -20,6 +27,16 @@ Confidence:
 - **Unknown** — production recognition accuracy, email delivery, backup
   restore, DNS/TLS, and alert delivery until real services are selected and
   accepted.
+
+## Current execution phase
+
+- R1 workstreams and dependencies: `IMPLEMENTATION_PLAN_R1.md`.
+- Release evidence: `R1_GATE_CHECKLIST.md`; RG0 is partial and RG1–RG9 are not
+  accepted for target R1.
+- UI direction: user-provided `DESIGN.md`, adapted through
+  `DESIGN_IMPLEMENTATION_R1.md`.
+- No R1 implementation slice has been claimed complete by this documentation
+  update.
 
 ## Shipped to production
 
@@ -140,13 +157,15 @@ These are not code-completion claims:
 Until those seven gates have evidence, the accurate state is **deployable
 release candidate**, not **online production**.
 
-## Deferred after launch beta
+## Complete target not yet implemented
 
-- Product-level AI explanation (D-021).
-- Health-context profile fields until used by a shipped function (D-022).
-- H5 Web Push, WeChat login/upload/subscription messages, and mini-program UI.
-- Data export, AI note/conversation organization, advanced analytics, public
-  registration, payments, and quotas beyond safety limits.
+- R1 target schema/state/version contracts, independent capture slots, complete
+  occurrence/intake/inventory/reminder projections, target UI and release gates.
+- R2 cost ledger, ingredient understanding/calendar, exports, and manual notes.
+- R3 controlled supplement AI and purpose-bound minimum health context.
+- R4 external notifications, WeChat login/upload and mini-program UI.
+- Public registration, payments, collaboration, commerce, and prescription/OTC
+  management remain outside the current confirmed delivery scope.
 
 ## Known debt
 

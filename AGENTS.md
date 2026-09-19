@@ -2,7 +2,8 @@
 
 ## Objective
 
-Build a production-oriented, independently movable project for “小补Q / Supp Q”:
+Build the confirmed complete product in `prd/PRD.md` through staged,
+evidence-gated releases. The immediate execution target is R1:
 
 ```text
 anonymous isolated demo
@@ -22,12 +23,16 @@ The first shipping surface is H5. The client must use uni-app, Vue 3, and TypeSc
 
 Read these files before changing code:
 
-1. `PRD.md`
-2. `docs/DECISIONS.md`
-3. `docs/ARCHITECTURE.md`
-4. `docs/PROJECT_STATUS.md`
-5. `docs/HANDOFF.md`
-6. The task-specific document under `docs/`
+1. `docs/DOCUMENT_AUTHORITY.md`
+2. `prd/PRD.md`
+3. `docs/IMPLEMENTATION_PLAN_R1.md`
+4. `docs/R1_GATE_CHECKLIST.md`
+5. `docs/DESIGN.md` and `docs/DESIGN_IMPLEMENTATION_R1.md` for UI work
+6. `docs/DECISIONS.md`
+7. `docs/ARCHITECTURE.md`
+8. `docs/PROJECT_STATUS.md`
+9. `docs/HANDOFF.md`
+10. The task-specific document under `docs/`
 
 ## Frozen Areas
 
@@ -63,5 +68,5 @@ A feature is complete only when:
 4. Authorization and isolation are tested.
 5. Failure, timeout, retry, and recovery states are visible where applicable.
 6. Relevant unit, integration, and browser E2E tests pass.
-7. `docs/PROJECT_STATUS.md` and `docs/HANDOFF.md` reflect reality.
-
+7. `docs/PROJECT_STATUS.md`, `docs/R1_GATE_CHECKLIST.md`, and
+   `docs/HANDOFF.md` reflect reality.

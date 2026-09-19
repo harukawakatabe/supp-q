@@ -2,8 +2,9 @@
 
 ## Current truth
 
-`uni/` is the only active implementation. It is a locally accepted H5 release
-candidate with the deterministic supplement loop, invitation identity, private
+`uni/` is the only active implementation. The complete product contract is
+confirmed, and `docs/IMPLEMENTATION_PLAN_R1.md` is the current execution plan.
+The code is still a locally accepted H5 release candidate with the deterministic supplement loop, invitation identity, private
 three-image recognition boundary, Records/product/Me surfaces, account/file
 cleanup, production Compose/Caddy, health/metrics, encrypted backup/restore
 tooling, evaluation CLI, and Playwright CI.
@@ -18,16 +19,21 @@ or provider has been selected.
 
 1. `../AGENTS.md`
 2. `../CLAUDE.md`
-3. `PRD.md`
-4. `docs/PROJECT_STATUS.md`
-5. `docs/ACCEPTANCE.md`
-6. `docs/DECISIONS.md`
-7. `docs/DEVELOPMENT_VS_PRODUCTION.md`
-8. `docs/EXTERNAL_RESOURCES.md`
-9. `docs/SECURITY.md`
-10. `contracts/openapi.yaml`
+3. `docs/DOCUMENT_AUTHORITY.md`
+4. `prd/PRD.md`
+5. `docs/IMPLEMENTATION_PLAN_R1.md`
+6. `docs/R1_GATE_CHECKLIST.md`
+7. `docs/DESIGN.md` and `docs/DESIGN_IMPLEMENTATION_R1.md` for UI work
+8. `docs/PROJECT_STATUS.md`
+9. `docs/DECISIONS.md`
+10. `docs/ARCHITECTURE.md`
+11. `docs/DEVELOPMENT_VS_PRODUCTION.md`
+12. `docs/EXTERNAL_RESOURCES.md`
+13. `docs/SECURITY.md`
+14. `contracts/openapi.yaml`
 
-The sibling `web/`, `mvp/`, and `demo/` directories are frozen. Inspect only;
+The archived Launch-Beta/product-generation documents under `archive/` are
+historical evidence only. The sibling `web/`, `mvp/`, and `demo/` directories are frozen. Inspect only;
 never modify or import them.
 
 ## Local start and acceptance
@@ -76,11 +82,12 @@ explicitly authorizes destroying local data.
 
 ## Scope decisions
 
-- Launch beta is H5 only. WeChat upload/login/subscription work is deferred.
+- R1 is H5 only. WeChat upload/login/subscription work is R4.
 - In-app reminders ship; Web Push is deferred.
-- Product-level AI explanation was removed from the launch gate by D-021.
-- Health-context fields are not collected until a shipped function needs them
-  (D-022).
+- Product-level AI was removed from the Launch-Beta gate by D-021 and is now an
+  R3 controlled supplement-information capability, not a hidden R1 feature.
+- Health-context fields remain absent until an R3/R4 shipped function has a
+  field-level purpose and authorization (D-022).
 - Automatic invitation email links are not implemented; the admin deliberately
   shares the one-time secret. SMTP login/reset codes are implemented.
 
@@ -98,5 +105,6 @@ explicitly authorizes destroying local data.
 - The CI workflow under `uni/.github/` activates only after `uni/` is the
   repository root.
 
-After every material change, update `PROJECT_STATUS.md`, `ACCEPTANCE.md`, the
-OpenAPI contract, and this handoff with evidence—not inference.
+After every material change, update `PROJECT_STATUS.md`,
+`R1_GATE_CHECKLIST.md`, the implemented OpenAPI contract, and this handoff with
+evidence—not inference.

@@ -1,8 +1,10 @@
-# Target Architecture
+# Implemented Architecture Baseline
 
-Status: locally verified H5 launch-beta implementation plus production release
-assets. Live-provider accuracy and external deployment remain unverified unless
-`PROJECT_STATUS.md` records accepted evidence.
+Status: locally verified H5 Launch-Beta implementation plus production release
+assets. This file describes the current foundation, not the full target data/API
+model. The confirmed target is `../prd/PRD.md`; R1 sequencing is in
+`IMPLEMENTATION_PLAN_R1.md`. Live-provider accuracy and external deployment
+remain unverified unless `PROJECT_STATUS.md` records accepted evidence.
 
 ## System
 

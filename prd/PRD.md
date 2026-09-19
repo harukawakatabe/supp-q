@@ -6697,11 +6697,11 @@ flowchart TD
 
 | 层级 | 本 PRD 完成后的状态 | 含义 |
 | --- | --- | --- |
-| 产品合同 | 当前 `MODULE_19_PENDING_CONFIRMATION`；确认后 `CONTRACT_READY` | 完整产品思想、R1–R4 顺序、业务规则、数据/权限、非功能要求与验收口径已经可实施 |
+| 产品合同 | `CONTRACT_READY`（模块 19 已于 2026-09-19 确认） | 完整产品思想、R1–R4 顺序、业务规则、数据/权限、非功能要求与验收口径已经可实施 |
 | 实现 | `PARTIALLY_IMPLEMENTED` | 当前 Uni 只有 Launch RC 底座和部分闭环；模块 5–18 的目标差距仍需按批次实现、迁移和验证 |
 | 生产 | `NOT_DEPLOYED` | 没有生产环境或真实生产用户；只有 RG0–RG9、Canary 和真实外部证据通过后才可变为 `PRODUCTION_ACCEPTED` |
 
-因此，模块 19 确认后可以进入正式实施拆解，但不能据此对外声称完整产品已经开发完成或上线。
+因此，当前可以进入正式实施拆解，但不能据此对外声称完整产品已经开发完成或上线。
 
 ### 19.2 最终裁决顺序
 
@@ -6752,7 +6752,7 @@ flowchart TD
 | depleted | 旧单字段状态 | 只解析为 `stockState=depleted`；不暂停 planState、不删除 occurrence | `APPROVED_TARGET` |
 | OTC/prescription 枚举 | 当前 schema/旧数据可能存在 | 不是产品能力；新写拒绝，旧行进入 `unsupported_legacy`，无普通 UI/AI/今日入口 | `NOT_IN_SCOPE` + migration quarantine |
 | “已验证” | 历史本地测试、Fake、synthetic | 只对应固定版本和环境；不得升级为目标实现或生产证据 | `VERIFIED_LOCAL` 或更低，不是 `PRODUCTION_ACCEPTED` |
-| 模块 18 Gate 快照 | 写入时 M18 待确认、M19 未完成 | 用户说“继续”即确认 M18；M19 确认后 RG0 的“PRD 模块确认”子项才可关闭 | 本模块待最终确认 |
+| 模块 18 Gate 快照 | 写入时 M18 待确认、M19 未完成 | 用户已确认 M18/M19；RG0 的“PRD 模块确认”子项已关闭，RG0 其余合同、负责人和证据仍独立验收 | `CONTRACT_READY` |
 
 未在本表列出的术语按模块 0、15、16 的命名空间、版本和数据权威解释。实现不得保留一个无命名空间的通用 `status` 供多个领域共同读写。
 
@@ -6939,7 +6939,7 @@ ChangeSpec 不能只写 UI 差异。旧客户端、历史数据、导出、埋�
 
 ### 19.15 本模块最终确认点
 
-本模块建议最终冻结以下收口判断：
+用户已于 2026-09-19 确认以下收口判断：
 
 1. 模块 1–19 共同组成小补Q完整产品合同；R1–R4 是交付顺序，不缩减最终功能思想。
 2. 产品只做补剂，无处方药或不可用药品入口；旧 OTC/prescription 数据仅隔离迁移。
@@ -6950,7 +6950,7 @@ ChangeSpec 不能只写 UI 差异。旧客户端、历史数据、导出、埋�
 7. 每个工单必须可追到模块、数据/API、验收和 Gate；每个 release 必须可追到同一 artifact 的证据包。
 8. 模块 19 确认只代表 `CONTRACT_READY`，不代表 `IMPLEMENTED`、`VERIFIED_STAGING` 或 `PRODUCTION_ACCEPTED`。
 
-请确认模块 19。确认后，19 模块 PRD 生成流程结束；下一步应另起实施拆解/技术设计与 R1 Gate 清单，不继续在本 PRD 末尾无边界追加功能。
+模块 19 已确认，19 模块 PRD 生成流程结束。下一步应另起实施拆解/技术设计与 R1 Gate 清单，不继续在本 PRD 末尾无边界追加功能。
 
 ## 附：自检与待完善清单
 
@@ -6986,6 +6986,6 @@ ChangeSpec 不能只写 UI 差异。旧客户端、历史数据、导出、埋�
 
 ### A.3 最终文档状态
 
-在用户确认模块 19 前：`MODULE_19_PENDING_CONFIRMATION`。
+模块 19 已于 2026-09-19 确认。当前文档状态为：`CONTRACT_READY / IMPLEMENTATION_PARTIAL / PRODUCTION_NOT_DEPLOYED`。
 
-在用户确认模块 19 后：`CONTRACT_READY / IMPLEMENTATION_PARTIAL / PRODUCTION_NOT_DEPLOYED`。此状态只说明需求合同已收口，所有实现、真实外部调用、迁移、测试和上线 Gate 仍必须用对应版本的实际证据单独关闭。
+此状态只说明需求合同已收口，所有实现、真实外部调用、迁移、测试和上线 Gate 仍必须用对应版本的实际证据单独关闭。

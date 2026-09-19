@@ -20,4 +20,4 @@
 | 2026-09-19 | M16 数据模型、数据流、接口、权限与隐私 | 已确认 M5–M15、Uni migrations/OpenAPI/identity/catalog/recognition 服务、架构/安全/环境边界/外部资源文档 | 已确认（2026-09-19） | 无 |
 | 2026-09-19 | M17 埋点、运营管理与可观测性 | 已确认 M3/M5–M16 指标与事实合同、Uni HTTP metrics/logging/readiness/heartbeat、邀请后台、识别评测 CLI、部署与安全文档 | 已确认（2026-09-19） | 无 |
 | 2026-09-19 | M18 非功能要求、迁移、上线与验收计划 | 已确认 M1–M17、Uni Makefile/CI/tests/migrations/config、Compose/Caddy、backup/restore/restart 脚本、Acceptance/Status/Handoff/External Resources/Security 文档 | 已确认（2026-09-19） | 无 |
-| 2026-09-19 | M19 风险、待决事项与最终自检 | 已确认 M1–M18、全文术语/范围/状态/权限/数据/指标/验收/Gate 审计、当前实现与外部资源缺口 | 待用户确认 | 冻结决定、历史标签 reconciliation、负责人角色、OD-01–OD-16、RK-01–RK-18、需求追踪、最终验收索引、DoR/Done、变更控制与文档状态 |
+| 2026-09-19 | M19 风险、待决事项与最终自检 | 已确认 M1–M18、全文术语/范围/状态/权限/数据/指标/验收/Gate 审计、当前实现与外部资源缺口 | 已确认（2026-09-19） | 无 |

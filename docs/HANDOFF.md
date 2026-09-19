@@ -2,9 +2,9 @@
 
 ## Current truth
 
-`uni/` is the only active implementation. The complete product contract is
+This repository is the only active implementation. The complete product contract is
 confirmed, and `docs/IMPLEMENTATION_PLAN_R1.md` is the current execution plan.
-The R1 platform-spine migration at implementation commit `086d2f9` is locally
+The R1 platform-spine migration at standalone implementation commit `d45dae5` is locally
 verified on fresh and synthetic current snapshots; remaining R1 schema groups
 and every production Gate are still open.
 The code is still a locally accepted H5 release candidate with the deterministic supplement loop, invitation identity, private
@@ -20,30 +20,30 @@ or provider has been selected.
 
 ## Read first
 
-1. `../AGENTS.md`
-2. `../CLAUDE.md`
-3. `docs/DOCUMENT_AUTHORITY.md`
-4. `prd/PRD.md`
-5. `docs/IMPLEMENTATION_PLAN_R1.md`
-6. `docs/R1_GATE_CHECKLIST.md`
-7. `docs/EXECUTION_REGISTRY_R1.md`
-8. `docs/SCHEMA_R1.md` for schema/domain work
-9. `docs/DESIGN.md` and `docs/DESIGN_IMPLEMENTATION_R1.md` for UI work
-10. `docs/PROJECT_STATUS.md`
-11. `docs/DECISIONS.md`
-12. `docs/ARCHITECTURE.md`
-13. `docs/DEVELOPMENT_VS_PRODUCTION.md`
-14. `docs/EXTERNAL_RESOURCES.md`
-15. `docs/SECURITY.md`
-16. `contracts/openapi.yaml`
+1. `AGENTS.md`
+2. `docs/DOCUMENT_AUTHORITY.md`
+3. `prd/PRD.md`
+4. `docs/IMPLEMENTATION_PLAN_R1.md`
+5. `docs/R1_GATE_CHECKLIST.md`
+6. `docs/EXECUTION_REGISTRY_R1.md`
+7. `docs/SCHEMA_R1.md` for schema/domain work
+8. `docs/DESIGN.md` and `docs/DESIGN_IMPLEMENTATION_R1.md` for UI work
+9. `docs/PROJECT_STATUS.md`
+10. `docs/DECISIONS.md`
+11. `docs/ARCHITECTURE.md`
+12. `docs/DEVELOPMENT_VS_PRODUCTION.md`
+13. `docs/EXTERNAL_RESOURCES.md`
+14. `docs/SECURITY.md`
+15. `contracts/openapi.yaml`
 
 The archived Launch-Beta/product-generation documents under `archive/` are
-historical evidence only. The sibling `web/`, `mvp/`, and `demo/` directories are frozen. Inspect only;
-never modify or import them.
+historical evidence only. Frozen `web/`, `mvp/`, `demo/`, and pre-extraction
+`uni/` snapshots remain only in the former parent repository; never import or
+depend on them.
 
 ## Local start and acceptance
 
-From `uni/`:
+From the repository root:
 
 ```bash
 make dev
@@ -69,11 +69,10 @@ docker-compose -f deploy/compose.dev.yml exec -T api \
 `make down` preserves data volumes. Never remove volumes unless the user
 explicitly authorizes destroying local data.
 
-At this checkout, `pnpm@11.24.0` is installed while `app/package.json` declares
-`pnpm@11.9.0`. Automatic version switching failed when the registry signature
-could not be fetched. The 2026-09-19 verification therefore called the existing
-`node_modules/.bin` tools directly; RG1 must pin and execute one verified package
-manager path in active hosted CI.
+`app/package.json` and hosted CI pin `pnpm@11.9.0`. On 2026-09-19, a clean
+standalone clone completed `make install`, `make check`, `make test`, and
+`make build` through the pinned package-manager path. Hosted run `35442408074`
+then passed client, server, and integration E2E at commit `55587f9`.
 
 ## Production path
 
@@ -113,8 +112,8 @@ manager path in active hosted CI.
   and queue checks.
 - Product edits must preserve day-cycle history. The service reconstructs that
   history in `ScheduleView`; removing it changes past Today calculations.
-- The CI workflow under `uni/.github/` activates only after `uni/` is the
-  repository root.
+- `.github/workflows/ci.yml` is active in the standalone repository. Keep pnpm
+  installation before `actions/setup-node` while pnpm caching is enabled.
 
 After every material change, update `PROJECT_STATUS.md`,
 `R1_GATE_CHECKLIST.md`, the implemented OpenAPI contract, and this handoff with

@@ -7,13 +7,17 @@ Last updated: 2026-09-19
 
 ## 1. Direct conclusion
 
-R1 implementation may proceed locally, but RG0 and RG1 cannot pass yet:
+R1 implementation may proceed in the independent `supp-q` repository, but RG0
+and RG1 cannot pass yet:
 
 - the accountable human owner names and escalation route remain `OPEN_OD_01`;
-- the current Git repository root is the parent `supplement-record/` directory;
-- `uni/.github/workflows/ci.yml` is therefore a portable CI definition, not an
-  active GitHub Actions workflow in this checkout;
-- the repository boundary will not be changed implicitly during schema work.
+- the repository was extracted with path history to
+  `github.com/harukawakatabe/supp-q` on 2026-09-19;
+- `.github/workflows/ci.yml` is active on pushes to `main` and pull requests;
+- hosted run `35442408074` passed client, server, and integration E2E at commit
+  `55587f9` and retained the integration evidence artifact;
+- branch protection and required-check policy remain unconfigured evidence for
+  RG1.
 
 Codex may implement and verify changes, but it is not the Product, Security,
 QA, or Operations signatory. A single human may hold several roles, but each
@@ -23,21 +27,12 @@ role's decision and evidence must be recorded separately.
 
 | Item | Decision | Consequence |
 | --- | --- | --- |
-| Active implementation directory | `uni/` only | No new runtime dependency on `mvp/`, `web/`, or `demo/` |
-| Current Git root | Parent `supplement-record/` repository | Frozen historical projects remain versioned but are not built |
-| Local execution root | `uni/` | `make check`, `make test`, `make build`, and integration commands run here |
-| Portable CI definition | `uni/.github/workflows/ci.yml` | It becomes active only when `uni/` is the repository root |
-| Root-level workflow | Not created | Creating project CI outside `uni/` would violate the current project boundary |
-| RG1 status | `PARTIAL` | Local repeatability can improve; branch protection and active hosted CI remain open |
-
-Before RG1 can pass, the project owner must explicitly choose and execute one
-of these repository operations:
-
-1. extract `uni/` into its own repository while preserving relevant history; or
-2. approve a contract change that allows a root workflow scoped only to `uni/`.
-
-The default recommendation is option 1 because `uni/` is already designed to
-be independently movable and its workflow paths assume it is the root.
+| Active implementation boundary | This repository only | No runtime dependency on frozen `mvp/`, `web/`, `demo/`, or the old `uni/` snapshot |
+| Current Git root | `supp-q/` | `app/`, `server/`, `docs/`, and `.github/` are root children |
+| Local execution root | Repository root | `make check`, `make test`, `make build`, and integration commands run here |
+| Hosted CI | `.github/workflows/ci.yml` | Active on GitHub `main` pushes and pull requests |
+| Former parent | `supplement-record/` | Frozen migration source and rollback evidence only |
+| RG1 status | `PARTIAL` | Local and hosted execution exist; branch protection and required-check policy remain open |
 
 ## 3. Role registry
 
@@ -59,20 +54,21 @@ Gate acceptance and all production promotion.
 
 | Work ID | Scope | State | Evidence / blocker |
 | --- | --- | --- | --- |
-| S0-01 | Document authority and archive map | `DONE_LOCAL` | `DOCUMENT_AUTHORITY.md`; commit `4035d0a` |
+| S0-01 | Document authority and archive map | `DONE_LOCAL` | `DOCUMENT_AUTHORITY.md`; standalone commit `d22437b` |
 | S0-02 | Role and responsibility registry | `DONE_LOCAL_WITH_OPEN_OWNER` | This document; actual names remain `OPEN_OD_01` |
-| S0-03 | CI/repository-root decision | `DECIDED_DEFERRED_ACTIVATION` | Section 2; owner must authorize repository extraction or boundary change |
+| S0-03 | CI/repository-root decision | `DONE_REMOTE` | Extracted to `harukawakatabe/supp-q`; hosted run `35442408074` passed all jobs at `55587f9`; branch-protection evidence remains under RG1 |
 | S0-04 | Evidence locations and classification | `DONE_LOCAL` | Section 5 |
 | S0-05 | ChangeSpec template | `DONE_LOCAL` | `templates/CHANGE_SPEC.md` |
 | S1-01 | Target physical schema specification | `DRAFT_IMPLEMENTATION_SPEC` | `SCHEMA_R1.md`; review pending |
 | S1-02 | Current-snapshot inventory queries | `VERIFIED_LOCAL` | `../scripts/sql/r1_source_inventory.sql`; isolated PostgreSQL execution passed |
-| S1-03 | Platform-spine expand migration | `VERIFIED_LOCAL` | Implementation commit `086d2f9`; fresh/upgrade/rollback tests passed |
+| S1-03 | Platform-spine expand migration | `VERIFIED_LOCAL` | Standalone implementation commit `d45dae5`; fresh/upgrade/rollback tests passed |
 | S1-04 | Fresh/current-snapshot migration rehearsal | `VERIFIED_LOCAL` | Synthetic Launch-Beta fixture; evidence in `../reports/r1/2026-09-19-s1-platform-spine/README.md` |
 | S1-05 | Remaining R1 expand/backfill migrations | `NOT_STARTED` | Product/capture/plan/intake/reminder tables after S1-03 review |
 
 State vocabulary:
 
 - `DONE_LOCAL`: artifact exists and local structural checks pass.
+- `DONE_REMOTE`: the external repository operation exists and has been directly verified.
 - `IMPLEMENTED_UNVERIFIED`: code exists but required runtime evidence is absent.
 - `VERIFIED_LOCAL`: required local runtime tests pass for the exact commit.
 - `OPEN`: required decision or evidence is missing.
@@ -98,7 +94,7 @@ timestamp, and skip/N/A reason.
 The next valid transition is:
 
 ```text
-platform spine VERIFIED_LOCAL at 086d2f9
+platform spine VERIFIED_LOCAL at d45dae5
 → accountable engineering/domain review of SCHEMA_R1.md
 → E2 product/profile/ingredient expand migration
 → synthetic current-snapshot backfill and reconciliation

@@ -36,7 +36,7 @@ never invent a day to make an exact-date field pass.
 
 ## Gate
 
-From `uni/`:
+From the repository root:
 
 ```bash
 make recognition-eval INPUT=testdata/recognition/private/evaluation.json \

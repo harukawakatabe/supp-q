@@ -72,7 +72,7 @@ Do not paste secret values into project documents.
 - timeout and quota.
 - data-retention terms recorded by the owner.
 
-Place local values only in `uni/server/.env.local` (ignored). For the
+Place local values only in `server/.env.local` (ignored). For the
 evidence-first route use `SUPPQ_RECOGNITION_PROVIDER=evidence_pipeline`,
 `SUPPQ_RECOGNITION_MODE=ocr_llm`, `SUPPQ_OCR_BASE_URL/API_KEY/MODEL`, and
 `SUPPQ_STRUCTURE_BASE_URL/API_KEY/MODEL/AUTH_MODE/THINKING`. Optional

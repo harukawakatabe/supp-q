@@ -1,6 +1,6 @@
 # 小补Q / Supp Q
 
-`uni/` is the independent production-oriented project for a supplement label
+This is the independent production-oriented repository for a supplement label
 recognition, scheduling, intake, inventory, and reminder service.
 
 ## Current status
@@ -64,12 +64,12 @@ and cannot override the active set.
 
 ## Independence rule
 
-This directory must remain movable as a standalone repository. It does not
-import, read, or execute files from sibling `web/`, `mvp/`, or `demo/`.
+This repository does not import, read, or execute files from the frozen legacy
+`web/`, `mvp/`, `demo/`, or pre-extraction `uni/` snapshots retained in the
+former parent repository.
 
-`uni/.github/workflows/ci.yml` becomes an active GitHub workflow after `uni/`
-is moved to its own repository root. It is intentionally not duplicated into
-the frozen parent repository.
+`.github/workflows/ci.yml` is active at the repository root. It is intentionally
+not duplicated into the frozen parent repository.
 
 ## Working brand
 

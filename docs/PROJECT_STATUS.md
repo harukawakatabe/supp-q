@@ -74,7 +74,7 @@ or accepted recognition provider has been supplied.
   platform spine adds workspace timezone versions, ClientAction, DomainChange,
   consumer receipts, projection revisions, and unsupported-product quarantine.
 - Fresh, synthetic Launch-Beta snapshot upgrade, compatibility and pre-target-
-  write rollback tests pass for implementation commit `086d2f9`; this does not
+  write rollback tests pass for standalone implementation commit `d45dae5`; this does not
   mean the remaining target schema/backfills are implemented.
 - Six-decimal quantities,
   transactionally consistent FEFO allocation, idempotency, and tenant scope on
@@ -186,5 +186,5 @@ release candidate**, not **online production**.
   SMTP.
 - Production backup tooling depends on `pg_dump`/`pg_restore`, MinIO `mc`, and
   `age`; those tools and real destinations are external operational resources.
-- `uni/.github/workflows/ci.yml` activates only when `uni/` is an independent
-  repository root, preserving the frozen parent-project boundary.
+- `.github/workflows/ci.yml` is active in the independent `supp-q` repository;
+  branch protection and required-check enforcement remain open RG1 work.

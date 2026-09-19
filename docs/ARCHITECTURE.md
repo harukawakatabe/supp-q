@@ -25,7 +25,7 @@ Browser / future WeChat mini-program
 ## Repository
 
 ```text
-uni/
+./
 ├── app/            uni-app client
 ├── server/         Go API and worker
 ├── contracts/      OpenAPI, errors, and async event contracts

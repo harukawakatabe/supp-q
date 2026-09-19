@@ -19,14 +19,14 @@
 
 ### 0.1 文档目的
 
-本 PRD 定义小补Q完整产品目标，以及该目标在 `uni/` 正式工程上的实现合同。它用于统一产品、设计、前端、后端、测试和上线验收，不用于记录某一轮代码已经完成了什么。
+本 PRD 定义小补Q完整产品目标，以及该目标在独立 `supp-q` 正式工程上的实现合同。它用于统一产品、设计、前端、后端、测试和上线验收，不用于记录某一轮代码已经完成了什么。
 
 本 PRD 与仓库内其他文档的关系如下：
 
-- `uni/prd/PRD.md`：从本轮开始逐模块生成的完整目标 PRD，是未来需求评审的主文档。
-- `uni/archive/launch-beta-2026-08/PRD.md`：Uni Launch-Beta 的历史范围和工程基线，已归档，不再作为完整产品范围上限。
+- `prd/PRD.md`：从本轮开始逐模块生成的完整目标 PRD，是未来需求评审的主文档。
+- `archive/launch-beta-2026-08/PRD.md`：Uni Launch-Beta 的历史范围和工程基线，已归档，不再作为完整产品范围上限。
 - `mvp/PRD.md`：完整产品思想、旧业务规则与交互设计的重要输入，但其中“药剂/药物/处方药”等历史表达不自动进入本 PRD。
-- `uni/archive/product-shaping-2026-09/`：用户已确认的产品定型、版本裁决、功能差距和视觉基线，是本 PRD 的已归档直接上游。
+- `archive/product-shaping-2026-09/`：用户已确认的产品定型、版本裁决、功能差距和视觉基线，是本 PRD 的已归档直接上游。
 
 ### 0.2 产品名称与当前形态
 
@@ -37,7 +37,7 @@
 | 首发载体 | 移动优先 H5，桌面浏览器可用 | `CONFIRMED` |
 | 后续载体 | 微信小程序可作为后续扩展，但当前不宣称可用 | `DEFERRED-ORDER` |
 | 当前产品边界 | 只做补剂；不提供处方药能力或不可用的假入口 | `CONFIRMED` |
-| 正式工程目录 | `uni/` | `CONFIRMED` |
+| 正式工程边界 | 独立 `supp-q` 仓库根目录 | `CONFIRMED` |
 
 ### 0.3 证据状态
 
@@ -59,7 +59,7 @@
 | S3 | `mvp/PRD.md` | 业务规则、对象、场景和历史边界 |
 | S4 | MVP/Web 样式与页面 | 用户认可的视觉语言、信息层级和密度 |
 | S5 | Uni 当前代码、契约和迁移 | 正式工程能力、数据权威及当前实现事实 |
-| S6 | `uni/archive/launch-beta-2026-08/PRD.md` 与相关技术文档 | Launch-Beta 历史范围、架构和验收记录 |
+| S6 | `archive/launch-beta-2026-08/PRD.md` 与相关技术文档 | Launch-Beta 历史范围、架构和验收记录 |
 | S7 | README、历史测试报告等 | 解释演进，不作为当前生产可用证明 |
 
 发生冲突时遵循以下规则：
@@ -5355,7 +5355,7 @@ HTTP 语义固定为：200/201 表示核心事实已经提交；202 表示请求
 
 ### 16.17 当前已验证 API 面
 
-当前 `uni/contracts/openapi.yaml` 只证明以下 launch-beta 面已定义；它不是完整产品 API：
+当前 `contracts/openapi.yaml` 只证明以下 launch-beta 面已定义；它不是完整产品 API：
 
 | 领域 | `VERIFIED_CURRENT` 路径 |
 | --- | --- |
@@ -6441,7 +6441,7 @@ Goose 的 Down 段是开发/受控测试工具，不构成生产一键回滚承�
 ### 18.20 构建、依赖与制品供应链
 
 - Node/pnpm/Go/toolchain、容器 base image 和应用依赖由 lockfile/digest 固定；升级通过单独 PR 与回归。
-- CI 必须在实际仓库根生效并受 branch protection 约束。当前 `uni/.github/workflows/ci.yml` 只有在 `uni/` 为仓库根时自动生效，未激活前不能把文件存在写成 CI 门禁已上线。
+- CI 必须在实际仓库根生效并受 branch protection 约束。当前 `.github/workflows/ci.yml` 已在独立仓库激活；在 branch protection 和 required checks 配置完成前，仍不能宣称 CI 门禁已闭环。
 - 构建生成 H5、API、Worker、Admin、Migrate 和必要工具；生产 runtime 不携带源码、包管理器或私密评测数据。
 - 每个 release 保存 git commit、build ID、镜像 digest、SBOM、依赖/镜像扫描、OpenAPI/迁移 checksum 和构建日志。
 - GitHub Actions 等第三方构建 action 锁定到审核过的 commit SHA；发布凭据使用短期最小权限。
@@ -6707,11 +6707,11 @@ flowchart TD
 
 当不同位置的文字看似冲突时，按以下顺序裁决：
 
-1. 用户在模块确认后的明确新决定，以及 `uni/archive/prd-generation-2026-09/prd/_append-log.md` 的确认状态。
+1. 用户在模块确认后的明确新决定，以及 `archive/prd-generation-2026-09/prd/_append-log.md` 的确认状态。
 2. 本模块的状态 reconciliation 和模块 15–18 的统一合同。
 3. 对应功能模块 5–14 的具体业务规则。
 4. 模块 1–4 的背景、目标、范围与体验原则。
-5. `uni/archive/product-shaping-2026-09/` 已确认材料。
+5. `archive/product-shaping-2026-09/` 已确认材料。
 6. 当前 Uni 代码/历史文档，只证明现状，不自动修改目标。
 7. MVP/Web 作为完整思想和视觉/交互参考，不作为生产工程事实。
 
@@ -6722,7 +6722,7 @@ flowchart TD
 | 编号 | 冻结决定 | 实施含义 |
 | --- | --- | --- |
 | FD-01 | MVP 是完整产品思想，不是待删减的原型范围 | R1–R4 是依赖顺序，不是把 R2–R4 永久移出范围 |
-| FD-02 | `uni/` 是唯一正式实现和验收路径 | MVP/Web 只提供产品和视觉参考，不继续形成第四套业务事实 |
+| FD-02 | 独立 `supp-q` 仓库是唯一正式实现和验收路径 | MVP/Web 只提供产品和视觉参考，不继续形成第四套业务事实 |
 | FD-03 | 视觉采用 MVP/Web 的信息密度与风格方向 | 由 Uni 补齐触控、响应式、无障碍、权限、异步和真实状态，不逐行复制旧前端 |
 | FD-04 | 产品只管理补剂 | 无 OTC/处方药新建、编辑、提醒、今日、AI 或假入口；旧枚举只做迁移隔离 |
 | FD-05 | AI 是补剂资料助手 | 不给个性化用量、开始/停止、诊断、治疗、安全性或相互作用结论，不写确定性核心事实 |

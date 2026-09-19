@@ -4,7 +4,7 @@
 
 | ID | Decision | Rationale |
 |---|---|---|
-| D-001 | All new project files live under `uni/`. | The directory may become an independent repository. |
+| D-001 | All new project files live in the active project repository. | The former `uni/` directory was extracted as the independent `supp-q` repository on 2026-09-19. |
 | D-002 | `web/`, `mvp/`, and `demo/` are frozen. | Prevent split sources of truth and accidental legacy development. |
 | D-003 | H5 ships first; WeChat mini-program follows. | Validate the service while keeping cross-platform client constraints. |
 | D-004 | Client target is uni-app + Vue 3 + TypeScript. | Reuse platform-neutral application code later. |
@@ -29,8 +29,9 @@
 | D-023 | Non-H5 upload adapters are not an H5 launch gate. | The first surface is H5; WeChat remains explicitly deferred and must not hold back H5 acceptance. |
 | D-024 | The confirmed complete product contract is `prd/PRD.md`; the old Launch-Beta PRD is archived. | Prevent the smaller implemented baseline from silently becoming the final scope. |
 | D-025 | `docs/DESIGN.md` is an active user-provided UI direction and must be preserved. | R1 adapts its Clay-inspired visual language through `docs/DESIGN_IMPLEMENTATION_R1.md`; mobile task clarity, accessibility, and page-level user review decide literal application. |
-| D-026 | Keep the current parent Git root during local R1 work; do not create a root workflow outside `uni/`. Prefer extracting `uni/` into its own repository before RG1. | The current portable workflow assumes `uni/` is root, while all new project files are required to stay under `uni/`; hosted CI therefore remains inactive until an explicit repository operation. |
+| D-026 | Superseded by D-028: keep the former parent Git root only until explicit repository extraction. | This preserved the frozen legacy boundary while the owner had not yet authorized the repository operation. |
 | D-027 | R1 schema migration uses expand/backfill/compatibility/validate/later-contract stages. The first migration adds only the platform spine and quarantine evidence. | Existing Launch-Beta reads/writes must stay functional while immutable versions and projections are reconciled; no destructive cutover is justified yet. |
+| D-028 | Extract the complete `uni/` path history into the private standalone `harukawakatabe/supp-q` repository; keep the former parent snapshot frozen for rollback. | Makes the portable root workflow active, removes ambiguity about the implementation boundary, and preserves relevant history without importing frozen projects. |
 
 ## Pending external choices
 

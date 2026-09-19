@@ -68,7 +68,7 @@ Pass owner: Engineering + QA.
 - [ ] Production-like backup/restore point, old deployed binary compatibility, and real snapshot reconciliation are proven.
 - [x] Contract/drop migration remains deferred to a later release.
 
-Current evidence: implementation commit `086d2f9` and
+Current evidence: standalone implementation commit `d45dae5` and
 `../reports/r1/2026-09-19-s1-platform-spine/README.md`. All checked items above
 are local/synthetic evidence, not staging or production acceptance.
 

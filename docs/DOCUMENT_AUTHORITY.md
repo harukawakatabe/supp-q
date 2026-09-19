@@ -70,16 +70,17 @@ The archive is recoverable Git history, not a deletion area. Historical paths
 inside archived files are preserved as written and may no longer resolve from
 their new directory.
 
-## Frozen sibling projects
+## Frozen historical projects
 
-`../mvp/`, `../web/`, and `../demo/` remain in place because they contain frozen
-historical code, tests, and visual evidence. They are not active documentation
-or runtime dependencies and must not be edited or imported without an explicit
-scope change.
+The former parent `supplement-record` repository retains frozen `mvp/`, `web/`,
+`demo/`, and pre-extraction `uni/` snapshots as historical code, tests, visual
+evidence, and rollback material. They are outside this repository, are not
+active documentation or runtime dependencies, and must not be edited or
+imported without an explicit scope change.
 
 ## Update discipline
 
-- Add new implementation files under `uni/` only.
+- Add new implementation files in this repository only.
 - Do not create another PRD, roadmap, acceptance document, or design system when
   an active document above can be versioned.
 - A new document must state its authority, status, owner role, and relationship

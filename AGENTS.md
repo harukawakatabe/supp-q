@@ -36,17 +36,17 @@ Read these files before changing code:
 11. `docs/HANDOFF.md`
 12. The task-specific document under `docs/`
 
-## Frozen Areas
+## Frozen Historical Sources
 
-- `../web/`
-- `../mvp/`
-- `../demo/`
-
-Do not modify or import from them. They are historical evidence only. Copy a needed rule or test into `uni/`, record its provenance in the commit or handoff, and let the new copy evolve independently.
+The former parent repository `supplement-record` retains frozen `web/`, `mvp/`,
+`demo/`, and pre-extraction `uni/` snapshots. They are not part of this
+repository and must never become runtime or build dependencies. If a historical
+rule or test is needed, copy it into this repository, record its provenance in
+the commit or handoff, and let the new copy evolve independently.
 
 ## Non-negotiable Boundaries
 
-- All new project files live under `uni/`.
+- All new project files live in this repository.
 - UI code never accesses the database, provider keys, or object storage credentials.
 - Route handlers authenticate, validate, authorize, call application services, and map responses.
 - All private queries include the effective `user_id` and `workspace_id`.

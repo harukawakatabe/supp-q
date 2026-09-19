@@ -134,7 +134,7 @@ representations.
 
 | Slice | Demonstrable result | Required evidence | Status |
 | --- | --- | --- | --- |
-| S0 | Active docs, owners, work IDs, CI path and evidence directories are clear | Document/link audit, RG0 checklist | In progress; registry/CI decision done, owner names open |
+| S0 | Active docs, owners, work IDs, CI path and evidence directories are clear | Document/link audit, RG0 checklist | In progress; standalone repository and hosted CI active, owner names and branch protection open |
 | S1 | Target expand migrations apply to empty DB and a current snapshot without destructive cutover | Migration report, counts, lock time, rollback point | In progress; platform spine verified, E2–E6 open |
 | S2 | ClientAction/result lookup and DomainChange/outbox support one harmless write end to end | Contract + integration + duplicate/restart tests | Not started |
 | S3 | Identity/Demo/admin/deletion run on compatibility schema with target audit and authorization | Cross-tenant, step-up, deletion residue tests | Not started |
@@ -146,7 +146,7 @@ representations.
 | S9 | R1 H5 visual system and all core states pass supported mobile/desktop accessibility review | Screenshot matrix, axe, keyboard, reader, real devices | Not started |
 | S10 | Production-like migration, dependencies, restore and canary use the same immutable digest | RG0–RG9 evidence pack | Not started |
 
-Platform-spine evidence for implementation commit `086d2f9` is recorded in
+Platform-spine evidence for standalone implementation commit `d45dae5` is recorded in
 `../reports/r1/2026-09-19-s1-platform-spine/README.md`. It closes only S1-03 and
 the synthetic local rehearsal portion of S1-04; it does not close S1 or RG2.
 
@@ -234,7 +234,7 @@ dataset, result, skip/N/A reason, and evidence location.
 | Priority | Task | Workstream | Blocking output |
 | --- | --- | --- | --- |
 | 1 | Assign actual role owners and evidence locations | W0 | OD-01 / RG0 |
-| 2 | Decide whether `uni/` becomes repository root so CI can be active | W0 | RG1 execution path |
+| 2 | Configure branch protection and require the active hosted CI checks | W0 | RG1 enforcement path |
 | 3 | Write target physical schema + current-snapshot inventory | W1 | S1 migration PR readiness |
 | 4 | Write target OpenAPI delta and error additions without claiming implementation | W2 | S2–S8 contract readiness |
 | 5 | Produce R1 wireframes/component states from the active design inputs | W8 | S4–S9 UI readiness |

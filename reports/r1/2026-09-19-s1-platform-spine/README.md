@@ -1,7 +1,7 @@
 # S1 Platform-Spine Local Evidence
 
 Evidence status: `VERIFIED_LOCAL / Synthetic`
-Implementation commit: `086d2f9`
+Standalone implementation commit: `d45dae5`
 Executed: 2026-09-19 Asia/Shanghai
 Environment: Darwin 25.5.0 arm64; Go 1.26.5; Node 25.8.0; PostgreSQL 17.10
 Scope: S1-02, S1-03, and synthetic-local portion of S1-04 only

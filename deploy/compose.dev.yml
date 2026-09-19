@@ -29,9 +29,9 @@ services:
       - "127.0.0.1:23646:23646"
     volumes:
       - object_data:/data
-    command: ["mini", "-dir=/data"]
+    command: ["mini", "-dir=/data", "-master.volumeSizeLimitMB=64"]
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9333/dir/status | grep -Eq '\"Free\":[1-9][0-9]*'"]
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9333/dir/status | grep -Eq '\"Free\":(1[4-9]|[2-9][0-9]|[1-9][0-9]{2,})'"]
       interval: 2s
       timeout: 2s
       retries: 30

@@ -99,9 +99,11 @@ or accepted recognition provider has been supplied.
   backend-only network, read-only containers, dropped capabilities, automatic
   TLS, CSP/HSTS/COOP, security headers, and external metrics denial.
 - Readiness checks PostgreSQL, private object bucket, worker heartbeat, and
-  recognition queue. Local Compose additionally waits for SeaweedFS to report
-  non-zero writable volume capacity before starting API and worker; `/metrics`
-  exposes request, queue, and worker gauges for an internal collector.
+  recognition queue. Local Compose fixes SeaweedFS development volumes at 64
+  MB and requires at least 14 free volume slots before starting API and worker;
+  this reserves both seven-volume growth batches needed by mini mode's default
+  and upload collections. `/metrics` exposes request, queue, and worker gauges
+  for an internal collector.
 - Per-IP API/auth rate limits with explicit trusted-proxy configuration.
 - Production configuration rejects insecure origin, database/object transport,
   weak token pepper, non-TLS SMTP, untrusted proxy, Fake recognition, and
@@ -143,6 +145,23 @@ or accepted recognition provider has been supplied.
 
 The Playwright suite uses generated one-pixel images only. No private user
 image was sent to a provider in this work.
+
+## Standalone CI hardening evidence on 2026-09-19
+
+- Hosted run `35452193408` reproduced the fresh-run failure: client and server
+  passed, while mobile Fake recognition timed out because SeaweedFS reported
+  `0 node candidates` after its default collection consumed all seven
+  auto-sized volume slots.
+- An isolated fresh local project with 64 MB development volumes reported
+  `Max=239, Free=239`; after the 60-second automatic default growth it retained
+  `Free=232` with volumes `1-7` allocated.
+- Production-style readiness, administrator bootstrap, and PostgreSQL
+  integration suites passed against that isolated stack.
+- Playwright passed `8`, skipped the two intentional cross-project duplicates,
+  and failed `0`; the mobile three-image upload, Fake candidate, and human
+  confirmation path completed after the default seven-volume allocation.
+- Evidence uses generated one-pixel images and `fake:development`; it proves
+  local/CI orchestration, not recognition accuracy or production storage.
 
 ## Remaining production gates
 

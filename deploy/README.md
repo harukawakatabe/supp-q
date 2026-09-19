@@ -22,9 +22,13 @@ make dev
 The Makefile prefers `docker compose` and falls back to the Homebrew
 `docker-compose` binary. Direct equivalents remain valid when needed.
 
-The SeaweedFS container is healthy only after its master reports non-zero free
-volume capacity. API and worker startup waits for that condition so an existing
-S3 bucket cannot mask an unwritable local volume server.
+The SeaweedFS container uses 64 MB development volumes and is healthy only
+after its master reports at least 14 free volume slots. Mini mode grows seven
+volumes per collection; reserving two growth batches prevents its default
+collection from exhausting a small CI disk before `suppq-uploads` can allocate
+its own writable volumes. API and worker startup waits for that condition, so
+an existing S3 bucket or one remaining free slot cannot mask unusable upload
+capacity.
 
 The local credentials committed in the development Compose file are disposable
 and must never be reused outside local development.

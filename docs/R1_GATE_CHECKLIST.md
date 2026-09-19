@@ -46,6 +46,11 @@ Pass owner: Product + Engineering + QA.
 
 ## RG1 — Repeatable build
 
+Local regression evidence on 2026-09-19 used a fresh isolated Compose project:
+SeaweedFS retained 232 free slots after its default seven-volume growth, Go
+integration passed, and Playwright completed with 8 passed, 2 intentional
+skips, and 0 failures. This is Fake/local evidence and does not close RG1.
+
 - [ ] CI runs from the actual repository root with branch protection.
 - [ ] Node/pnpm/Go/base images and third-party actions are pinned.
 - [ ] Type-check, lint/format, unit, integration, contract, H5 build, and Go builds pass.

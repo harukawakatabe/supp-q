@@ -6123,3 +6123,560 @@ flowchart TD
 8. P0 不变量违规立即阻断，P1/P2 有 owner、runbook、告警接收与演练；当前只有 metrics/readiness 而无真实告警接收方，仍是上线缺口。
 
 请确认模块 17。确认后，模块 18 将冻结性能、安全、可用性、兼容性、数据迁移、环境配置、测试层级、发布/回滚和生产验收门槛。
+
+## 18. 非功能要求、迁移、上线与验收计划
+
+### 18.1 核心发布结论
+
+当前 Uni 是可本地部署、已通过一轮历史本地验收的 H5 Release Candidate，但从未部署到生产，也没有真实生产用户和必须在线迁移的生产数据。因此本 PRD 的首要发布判断是：
+
+> 不先把当前 launch-beta 当完整产品上线，再在真实数据上拆状态、补版本、补账本和补权限。先完成 R1 目标数据合同、兼容迁移与生产门禁，再开放首批邀请。
+
+这不会把完整产品重新缩成小 MVP。R1–R4 仍按模块 3 的依赖顺序交付；每一批只开放已经实现、验证并可回滚的能力。当前代码可以复用身份、租户隔离、私有文件、持久任务、FEFO、幂等、精确撤销、清理、Compose/Caddy、评测 CLI 等底座，但完整目标状态以模块 5–17 为准。
+
+### 18.2 当前证据与不可推导事项
+
+| 证据 | 当前事实 | 不能推导 |
+| --- | --- | --- |
+| 2026-08-21 `make check/test/build` | 当时的 launch-beta 代码通过类型、Go 测试与构建 | 当前完整 PRD 已实现；今天重新运行仍必然通过 |
+| PostgreSQL integration | 身份、catalog、recognition 的租户、事务、清理和确认底座通过 | 模块 8–17 的目标表、状态和接口已覆盖 |
+| Playwright 8 pass / 2 designed skip | Chromium 移动/桌面主路径、Demo 隔离、Fake 三图、邀请删除和横向溢出通过 | Safari、真实 provider、无障碍、负载或生产网络通过 |
+| restart persistence | 本地 PostgreSQL/API/worker 重启后 session/数量保留且撤销精确恢复 | 灾难恢复、跨区域故障或生产 RPO/RTO 已通过 |
+| production Compose/Caddy | 配置可解析，有 migration gate、只读容器、后端内网、HTTPS/安全头和公网 metrics 拒绝 | 真实域名、DNS、证书、云数据库/COS/OSS 已运行 |
+| backup/restore scripts | 可加密打包数据库/对象并校验 manifest，restore 拒绝非 drill/非空目标 | 已产生真实异地备份、跨系统时间点一致或真实恢复成功 |
+| readiness/metrics | 本地可见 DB/storage/worker/queue 和基础运行指标 | 真实告警通知、值班、SLO 或 provider 质量已建立 |
+| synthetic Qwen/Kimi | 非私密合成样本证明调用和证据顺序 | 真实标签准确率、隐私授权或生产供应商已接受 |
+
+本轮只编写 PRD，没有重新运行上述代码验收。历史证据继续按“当时、当地、对应版本”引用，不能自动升级为当前或生产证据。
+
+### 18.3 状态词汇与“上线”的定义
+
+| 状态 | 定义 | 可对外表述 |
+| --- | --- | --- |
+| `NOT_IMPLEMENTED` | PRD 已定义，代码尚无能力 | 规划中/待实现 |
+| `IMPLEMENTED_UNVERIFIED` | 代码存在，适用测试或证据未完成 | 已实现，待验证 |
+| `VERIFIED_LOCAL` | 固定 commit 在本地/CI 受控依赖通过 | 本地验证通过 |
+| `VERIFIED_STAGING` | 同一不可变 artifact 在生产式环境通过 | 预发布验证通过 |
+| `CANARY` | 仅明确小范围真实账户使用，门禁和监控开启 | 小范围试用中 |
+| `PRODUCTION_ACCEPTED` | RG0–RG9 适用门禁通过、真实域名/依赖/告警/恢复有证据 | 已上线并完成生产验收 |
+| `DEGRADED` | 已上线能力被部分关闭或依赖异常 | 已降级，说明受影响范围 |
+| `DEFERRED` | 完整范围保留但本批不交付 | 后续交付，当前不可用 |
+
+代码合并、镜像构建、远端 push、服务器进程启动、health 200、截图、Fake 流程和 synthetic provider response 都不等于 `PRODUCTION_ACCEPTED`。
+
+### 18.4 非功能要求适用范围
+
+非功能门槛按能力分层：
+
+1. **核心事实层**：身份、产品、计划、记录、库存、成本、成分、笔记和删除，要求最高的数据正确性与可恢复性。
+2. **派生层**：风险、聚合、提醒、搜索、导出，允许异步，但必须有 revision、新鲜度和降级。
+3. **外部智能层**：识别与 AI，受 provider 可用性、成本和质量约束；失败时保留手工核心路径。
+4. **展示层**：H5 页面和可选分析，不能因为性能/采集失败改变业务事实。
+
+任何性能优化不得取消租户过滤、事务、历史版本、幂等或人工确认。正确性和隔离优先于更快返回。
+
+### 18.5 性能预算
+
+以下为 production 初始目标；统计均排除 Fake/测试流量并报告样本量和环境：
+
+| 路径 | 指标 | 目标 | 计时边界 |
+| --- | --- | --- | --- |
+| H5 首次加载 | LCP p75 | ≤2.5s | 支持的移动设备、正常 4G、冷缓存，真实生产 edge |
+| H5 交互 | INP p75 / CLS p75 | ≤200ms / ≤0.1 | Core Web Vitals 口径；页面切换另报 P95 |
+| 核心读取 API | server duration p95/p99 | ≤500ms / ≤2s | API 接收至响应完成，不含浏览器网络 |
+| 核心写 API | server duration p95/p99 | ≤800ms / ≤2s | 含核心 DB 事务，不等待异步投影 |
+| 幂等结果查询 | p95 | ≤300ms | `GET /actions/{id}` |
+| 文件槽位上传 | server persist p95 | 最后一个字节到 FileObject/SlotVersion 受理 ≤2s | 网络上传耗时分开；每图≤10MB |
+| 识别 | end-to-end p95 | ≤45s | 上传已受理至槽位终态；沿用已确认质量门禁 |
+| 核心投影 | source commit→fresh p95 | ≤10s | occurrence/风险/成分/成本等用户当前页所需投影 |
+| 提醒物化 | source commit→event 收敛 p95 | ≤60s | 站内提醒；不等于外部送达 |
+| 邮件验证码 | request accepted→provider accepted p95 | ≤5s；真实送达 p95≤60s | 两段分别测量；provider 拒绝不得伪成功 |
+| 10,000 行导出 | completed p95 | ≤2min | 受理后异步生成；超过时持续显示进度 |
+| AI preflight | p95 | ≤500ms | policy/授权/预算，不调用 provider |
+| AI 首次可见输出/终态 | TTFT p95 / 终态 p95 | ≤5s / ≤60s | 仅 R3 真实 provider，失败/拒答分开 |
+
+低样本时不报告无意义百分位，只显示原始次数。页面 skeleton 不能掩盖 LCP；HTTP 202 不能把未受理的外部任务算成完成。
+
+### 18.6 初始容量与大账户基准
+
+R1 邀请制生产至少在以下负载通过 30 分钟稳定测试和 1 分钟突发测试：
+
+| 维度 | 初始设计容量 |
+| --- | --- |
+| 并发活跃 H5 session | 100 |
+| 核心 API 稳态/突发 | 20 RPS / 50 RPS |
+| 并发核心写事务 | 10 |
+| 并发文件上传 | 5 个 10MB 槽位 |
+| Recognition job | 由已选 provider quota 决定，但队列不得丢任务；至少 5 个并发受控执行 |
+| 单工作区基准数据 | 500 产品、20,000 intake、2,000 batch、100,000 contribution、20,000 reminder event |
+
+通过条件：无负库存/重复副作用/跨租户，核心 p95 不超预算，DB pool 无持续饱和，queue/outbox 可在压测结束后 5 分钟内回落，内存不持续增长。当前固定 `MaxConns=10` 只是 launch-beta 默认值，必须经容量测试配置化；不能为压测通过无限增连接而压垮数据库。
+
+正式扩容门槛是达到最近 7 日 P95 容量的 60% 或错误预算消耗异常，而不是等服务失败后再扩。实际预测低于上述容量时仍以最低基准测试，避免“用户少所以不用验证”。
+
+### 18.7 可用性、错误预算与降级
+
+| 能力 | 月度 SLO | 失败时允许降级 |
+| --- | --- | --- |
+| 核心已认证 API | 99.5% | 只读或明确不可用；结果未知走 ClientAction 查询，不能假成功 |
+| H5 静态入口 | 99.5% | 显示带 request/status 的服务状态页，不提供过期写入口 |
+| 核心 Worker/投影 | 99.0% 在 SLO 内收敛 | 核心事实继续；显示上一 revision + stale/failed |
+| 识别 | 99.0% 任务可达终态 | 立即可用手工输入；保留上传和重试 |
+| AI | R3 99.0% 运行可达终态 | 笔记/事实页继续；关闭 AI 入口或明确失败 |
+| 邮件登录 | 99.0% provider accepted | 已有 session 不受影响；新登录说明故障，不绕过身份 |
+
+SLO 以用户可用的成功语义计算，计划维护也消耗错误预算。业务校验失败、策略拒答和用户取消不算系统不可用；5xx、超时、依赖故障、任务丢失和错误成功算。
+
+当 30 日错误预算消耗达到 50% 时停止非必要变更；达到 100% 时只允许可靠性/安全修复。外部智能 SLO 不能与核心 SLO 混成一个平均值。
+
+### 18.8 数据耐久、备份与灾难恢复目标
+
+| 项目 | 目标 |
+| --- | --- |
+| 核心 DB RPO | ≤1 小时；优先数据库连续归档/PITR，不能只依赖偶发全量脚本 |
+| 对象存储 RPO | ≤1 小时；启用版本/复制或等价保护，并与 DB 引用清单对账 |
+| 整体 RTO | ≤4 小时恢复最小核心读写；识别/AI 可后续恢复 |
+| 全量加密备份 | 至少每日；独立于应用主机和主账户权限域 |
+| 备份滚动保留 | 30 日；到期销毁，账户删除的备份残留窗口据此披露 |
+| restore drill | 首次生产前必须一次，之后至少每季度；每次使用空 DB/空 bucket |
+| 恢复核对 | manifest、表/对象数、抽样 hash、对象引用、迁移版本、核心不变量与登录/记录/删除 smoke |
+
+当前 `backup.sh` 先 dump DB 再 mirror 对象，不构成天然的跨系统同一时间点快照。目标方案必须保存 DB high-water mark/对象清单，暂停或版本化相关清理，恢复后运行“DB 文件引用 ↔ 对象”双向对账。脚本存在、archive 非空或表数>0 都不足以证明恢复可用。
+
+### 18.9 安全非功能门槛
+
+| 领域 | 硬要求 |
+| --- | --- |
+| Transport | 公网仅 HTTPS；TLS 1.2+；DB/object/SMTP 生产链路加密；HSTS 生效 |
+| Session | HttpOnly/Secure/SameSite、随机 token/HMAC 摘要、登录和提权轮换、注销/重置撤销 |
+| Admin | capability gate；敏感操作 10 分钟内重新认证且至少两种因素；全部 OperatorAudit |
+| Authorization | 每个私有 API/文件/任务/导出 userId + workspaceId；跨租户与不存在不可枚举 |
+| CSRF/CORS | 写请求校验 SameSite、Origin/Referer 或显式 CSRF 机制；只允许配置的 HTTPS origin |
+| Upload | JPEG/PNG/WebP 内容签名、MIME、大小、解码/压缩炸弹防护；随机对象 key；私有读取 |
+| Injection | 参数化 SQL；HTML/Markdown/URL allowlist；OCR/标签/prompt 作为不可信数据；SSRF 出站 allowlist |
+| Secrets | 不进 Git/H5/log/trace；生产使用 secret file/manager；轮换流程和泄露吊销演练 |
+| Supply chain | lockfile、SBOM、依赖/镜像/secret 扫描；发布镜像按 digest 签名/记录 |
+| Vulnerability gate | 0 个未豁免 Critical；High 必须有 owner、缓解、到期日并由发布负责人批准 |
+| Abuse | 多实例共享的认证/API/upload/provider 限流与预算；trust-proxy 正确；告警接收已验证 |
+| Data deletion | completed 前对象/DB/派生/下载均不可访问；备份残留窗口与 provider 删除可核对 |
+
+当前 production CSP 允许 style `unsafe-inline` 以兼容 Uni H5，但 script 只允许 self。目标是在不破坏框架的前提下逐步使用 nonce/hash 或消除不必要 inline style；任何 CSP 放宽都要说明路径和期限，禁止加入 `unsafe-eval`。
+
+安全测试至少覆盖 IDOR、会话固定/撤销、CSRF、CORS、XSS、SQL/命令注入、上传伪装/大文件、对象 key 枚举、SSRF、provider prompt injection、rate-limit 绕过、日志/错误泄密和 Admin 权限提升。
+
+### 18.10 数据保留与生产默认值
+
+除用户主动保留的业务事实外，生产默认期限冻结如下；实际 provider 更长保留时必须在启用前显式披露并重新评审：
+
+| 数据 | 生产默认 |
+| --- | --- |
+| Demo workspace/对象 | 24 小时无活动后进入清理 |
+| 注册用户未确认 CaptureDraft/slot | 最后活动 7 日后清理 |
+| 注册 session | 最长 30 日；密码重置/账户删除立即全部撤销 |
+| 邮件 challenge | 10 分钟有效；终态元数据 24 小时后清理 |
+| terminal invitation metadata | 180 日；secret 永不保留明文 |
+| Product/Plan/Intake/Inventory/Cost/Ingredient/Note | 账户/产品/用户删除前保留，不自动按时间丢弃事实 |
+| Note trash | 30 日可恢复，之后永久删除；账户删除不等待 grace |
+| ReminderEvent | 180 日用户历史；更老记录可按事实重建/聚合后清理 |
+| ClientAction/idempotency | 90 日；涉及更长任务的 resultRef 至任务完成后 90 日 |
+| delivered Outbox/consumer receipt | 30 日；未消费/失败事件不得因到期删除 |
+| terminal job 安全元数据 | 90 日；关联证据按产品/草稿生命周期独立处理 |
+| ExportArtifact | 7 日或用户提前删除 |
+| AI 用户可见 thread/note | 用户删除前；来源关系保留 |
+| AI 原始 provider request/response（如确需保存） | 最长 30 日、加密受限；默认不保存完整正文 |
+| AI/识别 usage 与安全审计 | 12 个月去内容化元数据 |
+| optional analytics raw events | 90 日；匿名 MetricSnapshot 最长 24 个月 |
+| 正常 logs / traces | logs 30 日；trace 14 日 |
+| security/error logs / OperatorAudit | 180 日 / 12 个月 |
+| 加密备份 | 30 日滚动 |
+
+日志、分析和审计保留不是用户正文的旁路备份。账户删除后移除可回溯 subject 映射；匿名聚合可以保留。期限变更需要隐私说明、配置版本和迁移计划，不能只改环境变量。
+
+### 18.11 无障碍与可用性要求
+
+H5 目标为 WCAG 2.2 AA 等级的实际可用性，不以“能显示”代替：
+
+- 320 CSS px 宽度与 200% 文本缩放下主流程无水平滚动、遮挡或信息丢失。
+- 正文对比度≥4.5:1，大字/关键非文本边界≥3:1；状态不能只靠颜色。
+- 所有功能可用键盘完成，焦点顺序、可见焦点、跳过导航和弹层焦点回收正确。
+- 输入有程序化 label、错误与字段关联；错误摘要可定位，动态状态使用适当 live region。
+- 图片有用途说明；标签证据图片的 alt 不暴露 OCR/个人内容，查看原图需授权。
+- 主要触控目标建议≥44×44 CSS px；任何目标不得低于 24×24 且必须有足够间距。
+- 支持 prefers-reduced-motion；加载动画、成功反馈和风险状态不依赖运动。
+- 屏幕阅读器能读出产品、时段、状态、数量/单位、按钮后果和 AI 标识。
+- 永久删除、AI 发送、过期批次 override 等高风险确认不能只依靠位置或颜色。
+
+当前只有 Chromium 横向溢出和少量结构测试，不等于无障碍通过。R1 必须增加自动 axe/等价检查、键盘流程和至少 VoiceOver iOS/Safari 或 TalkBack Android/Chrome 的人工主路径证据。
+
+### 18.12 H5 兼容与设备范围
+
+| 平台 | 发布支持 |
+| --- | --- |
+| iOS Safari | 当前与前一主版本，至少覆盖一台真实触控设备 |
+| Android Chrome | 当前与前两主版本，Android 10+ |
+| Desktop Chrome/Edge | 当前与前两主版本 |
+| macOS Safari | 当前与前一主版本 |
+| Firefox | 当前主版本，核心读写路径 |
+| 微信内 H5 WebView | 未完成真实兼容前不宣称支持；可做 smoke，但微信登录/小程序上传不属于 H5 门禁 |
+
+移动端是主体验；桌面必须可完整操作而非仅缩放。相机/相册能力失败时始终可选文件或手工建档。浏览器不支持某 API 时显示明确替代路径，不能隐藏按钮后形成死路。
+
+H5 `index.html` 使用 no-cache/no-store 或短缓存并重新验证，带 hash 的静态 asset 使用长期 immutable 缓存。发布后旧页面缓存必须能加载兼容 API 或被安全刷新，不能出现“旧 JS 写新 schema”。
+
+### 18.13 API、客户端与数据格式兼容
+
+- `/api/v1` 在同一 major 内做加法演进；删除/改语义需新 major 或完成 N/N-1 兼容窗口。
+- H5 与 API 同批发布时，服务端至少兼容上一已发布 H5 一个完整 release window；缓存清空不是唯一策略。
+- OpenAPI 是机器校验合同；CI 校验 request/response、错误码、decimal string、时间/时区和 breaking diff。
+- Feature capability 由 `/session` 或专用 capabilities 返回；旧客户端看不到新能力时不得写假默认。
+- CSV/导出带 schemaVersion、timezone、currency、generatedAt 和列定义；旧导出不被新解释器静默改义。
+- DomainChange、Event、Metric 和 AI policy/tool schema 独立版本；不能用一个 appVersion 代替全部合同版本。
+- 数据库 expand 与应用兼容先行；同一 release 不 rename/drop 旧列。contract migration 至少晚一个生产 release 和一份已验证备份。
+
+### 18.14 当前 Uni 到目标 R1 的迁移判断
+
+当前没有生产部署，所以目标 R1 应先作为新的正式 schema 进入 staging/canary。迁移仍必须支持现有 Uni 数据，以保证本地/未来试用数据不被抹除；但不得为了兼容旧字段继续保留错误业务语义。
+
+| 当前对象/字段 | 目标映射 | 迁移原则 |
+| --- | --- | --- |
+| `products.status` | catalogState + planState + stockState + riskState | active→柜内/计划 active；paused→柜内/计划 paused；depleted→柜内/计划 active + stock depleted；archived→archived + archived pause；stock/risk 重算 |
+| `product_type` | 仅 supplement | supplement 正常迁移；otc/prescription 进入 unsupported_legacy 隔离，不自动改成补剂、不展示正常入口 |
+| 产品当前列 | ProductProfileVersion v1 | 保存迁移时快照、source=legacy_current、原 updatedAt |
+| `product_ingredients` | IngredientProfileVersion/Item v1 | 保留原 name/amount/unit；规范化另算，未知不丢 |
+| `product_schedules` + `day_cycle_versions` | ScheduleVersion/DoseSlot/PlanStateInterval | 当前和已有 day-cycle 历史转不可变版本；long/weekly 当前语义保留，缺历史标 legacy_current_only |
+| `reminder_times[]` | DoseSlot localTime | 只迁移为计划时点；ReminderPreference=`needs_confirmation`，不自动开启通知 |
+| 无 workspace timezone | WorkspaceTimezoneVersion | 历史保存 legacy_unspecified；为了不漂移当前行为，初始 `Etc/UTC + needs_confirmation`，用户确认只影响未来 |
+| `inventory_batches` | Batch + CostVersion | 数量/有效期保留；priceCny>0→CNY known，0→unknown_legacy 而非“免费” |
+| `intake_records` | IntakeRecord + snapshot/status chain | source 映射并保留 occurred/recorded 事实；active/revoked 不改历史 |
+| `intake_allocations.unit_cost_cny` | AllocationCostSnapshot | >0 保留 CNY；0 且成本来源不明标 unknown，不伪造 0 成本 |
+| `inventory_events` | 不可变 InventoryEvent | 原事件保留；补 migration source/version，回放余额核对 |
+| `recognition_sets/files/jobs` | CaptureDraft/SlotVersion/Evidence/Job | 三角色各为 slotVersion 1；已确认 set 关联 Product，迟到任务按 current version 判断 |
+| 无 ClientAction/outbox | ClientAction/DomainChange | 不反造未知历史请求；为现有事实生成 migration snapshot event，不冒充用户实时动作 |
+| 当前即时风险/摘要 | ProjectionRevision | 从迁移后事实全量重算，不搬运旧缓存为 fresh |
+
+### 18.15 旧类型、时间与不完整数据处理
+
+迁移前必须生成数据盘点报告，至少列出：用户/工作区/产品/批次/记录/事件/文件/job 数；产品状态/类型分布；零价格；无有效期；孤儿对象；失败/运行中 job；无 schedule/ingredient；数量/事件不一致。
+
+特殊裁决：
+
+1. **OTC/处方药旧行**：不删除、不转 supplement、不进入 AI/提醒/今日；只提供受控导出、删除和人工审查。存在任一行时，公开 R1 cutover 必须有逐条处理记录。
+2. **时区缺失**：不按浏览器所在地回写历史。历史 localDate 原样保留并标 `legacy_unspecified`；用户确认 IANA timezone 后只生成未来版本。
+3. **0 元价格**：除非有明确 `free` 事实，否则迁移为 unknown_legacy，防止成本被低估。
+4. **日期精度**：现有 exact date 按现值保留；若 OCR 证据只有月/年，不补造日。证据与结构值冲突标 migrationReview。
+5. **配方/计划缺历史**：保留当时能证明的版本，标 completeness；不能用当前值重述所有过去 intake。
+6. **运行中任务**：cutover 前停止领取；可安全任务在新 worker 按 sourceVersion 回收，可能计费的外部 attempt 先判 unknown，不盲重试。
+7. **孤儿对象**：在宽限期和引用对账后清理；迁移不能先删 FileObject 定位信息。
+
+### 18.16 Expand–Backfill–Verify–Cutover–Contract
+
+```mermaid
+flowchart LR
+  A[盘点 + 加密备份 + restore rehearsal] --> B[Expand: 新表/列/索引/兼容代码]
+  B --> C[Backfill: 分批、可恢复、带 migrationVersion]
+  C --> D[Rebuild: 投影/搜索/指标]
+  D --> E[Shadow read + 不变量/行数/抽样对账]
+  E --> F{验收通过?}
+  F -- 否 --> G[停止 cutover，修正并重跑]
+  F -- 是 --> H[短时写冻结 + final delta]
+  H --> I[切目标 API/H5/worker + canary]
+  I --> J{观察窗口通过?}
+  J -- 否 --> K[关 flag/回旧应用或前向修复]
+  J -- 是 --> L[至少下一 release 后 Contract 旧结构]
+```
+
+规则：
+
+- Expand migration 可在线运行；新列先 nullable/有安全默认，长索引使用并发或等价方法，外键/CHECK 先 NOT VALID 后验证。
+- 单次锁表目标≤5 秒；预计超限必须拆分或进入公告写冻结，不能赌生产表很小。
+- Backfill 按稳定主键游标、小批事务执行，保存 cursor、attempt、counts、hash 和 error；可暂停、可重入、幂等。
+- 目标写入上线前可 shadow dual-write，但权威仍是旧路径；切换前必须比较两侧。不能长期双权威。
+- 最终 cutover 写冻结目标≤15 分钟；演练超过 15 分钟则不得生产执行，需继续拆分。
+- Contract 不在同一发布删除旧列/表；确认无旧客户端/worker、观察窗口通过、备份可恢复后才执行。
+- 本地卷也不得无授权清空；若用户确认全部是 seed/test，才可以选择重建而非迁移。
+
+### 18.17 迁移验收与对账
+
+| 对账 | 通过条件 |
+| --- | --- |
+| 行数与归属 | 每类源行 exactly once 映射或进入有原因的 quarantine；跨 workspace=0 |
+| 产品/状态 | 每个产品四维状态符合映射；unsupported 类型不出现在正常查询 |
+| 计划 | 当前日期前后的抽样 occurrence 与旧可证明结果一致；缺历史明确标记 |
+| 库存 | InventoryEvent 回放=Batch balance；负库存=0；allocation 总和=intake quantity |
+| 撤销 | revoked intake 的原批次补偿与余额上限一致，不因迁移重复恢复 |
+| 成本 | known/unknown/free 不混淆；迁移前后已知总取得成本和 allocation snapshot 可解释 |
+| 成分 | 原标签值不丢；不兼容单位不合并；当前 revision 来源完整 |
+| 文件 | active DB 引用均有对象；无引用对象进入宽限清单；private read 仍授权 |
+| 识别 | set/slot/job/evidence/source product 链可追溯；Fake/live 标识保留 |
+| 删除 | pending/deleting subject 不被旧 UI 恢复；cleanup 可继续 |
+| 时区 | 历史日期不漂移；needs_confirmation 可见；确认只改变未来 |
+| 指标 | migration snapshot 不冒充用户事件；Demo/internal/test 排除正确 |
+
+验收产物包含源/目标 counts、hash、异常清单、随机与风险样本、执行时间、锁等待、回滚点和签字。只看 migration 命令 exit 0 不算通过。
+
+### 18.18 数据迁移失败与回滚
+
+- Expand/Backfill 失败：应用继续读旧权威；停止 cursor，修复后幂等重跑，不执行 contract。
+- Final delta 前失败：解除写冻结，旧应用继续；记录冻结期间未受理请求，不伪成功。
+- Cutover 后发现展示/非破坏缺陷：先关闭 feature flag 或回滚 H5/API 到仍兼容新 schema 的上一 artifact。
+- Cutover 后发现新写语义错误：停止相关写入，保全事实，用补偿/前向迁移修复；不自动执行 destructive down migration。
+- 只有前向修复无法保证安全时才从已验证备份恢复；必须计算 restore point 后已确认写入的影响，并由事故负责人明确授权。
+- 永久删除 tombstone、账户 pending_deletion 和安全撤销不能因应用/数据库回滚重新变为可访问。
+
+Goose 的 Down 段是开发/受控测试工具，不构成生产一键回滚承诺。
+
+### 18.19 环境与配置模型
+
+| 环境 | 数据/provider | 用途 | 禁止 |
+| --- | --- | --- | --- |
+| development | seed/Demo；Fake 默认，显式可用受授权 sandbox | 本地开发 | 冒充质量或生产证据 |
+| test/CI | 合成数据、Fake、临时 PostgreSQL/object/mail | 自动门禁 | 真实用户数据/私密标签/生产 secret |
+| staging | 与生产同版本/拓扑，隔离账号、合成+授权专用样本 | 迁移/性能/失败/浏览器/恢复演练 | 连接生产 bucket/数据库、复制未脱敏真实数据 |
+| production | real/pilot，已选真实依赖；Fake 禁止 | 真实用户 | debug 默认、公共 metrics、未审计配置变更 |
+
+同一不可变镜像 digest 从 staging 晋级 production，不在生产主机重新 build。配置分为公开、敏感和运行策略；敏感值只在 secret manager/受限文件，策略变化带 configVersion 与审计。API 和 Worker 分别执行 no-network preflight，随后做实际依赖 smoke。
+
+允许的环境差异：Fake 明示、测试 TTL 加速、Mailpit、本地 HTTP。禁止差异：授权、租户、幂等、计划/FEFO/单位规则、迁移、错误语义和人工确认边界。
+
+### 18.20 构建、依赖与制品供应链
+
+- Node/pnpm/Go/toolchain、容器 base image 和应用依赖由 lockfile/digest 固定；升级通过单独 PR 与回归。
+- CI 必须在实际仓库根生效并受 branch protection 约束。当前 `uni/.github/workflows/ci.yml` 只有在 `uni/` 为仓库根时自动生效，未激活前不能把文件存在写成 CI 门禁已上线。
+- 构建生成 H5、API、Worker、Admin、Migrate 和必要工具；生产 runtime 不携带源码、包管理器或私密评测数据。
+- 每个 release 保存 git commit、build ID、镜像 digest、SBOM、依赖/镜像扫描、OpenAPI/迁移 checksum 和构建日志。
+- GitHub Actions 等第三方构建 action 锁定到审核过的 commit SHA；发布凭据使用短期最小权限。
+- 生产镜像非 root、read-only、drop capabilities、no-new-privileges；当前 Compose 底座继续保留。
+- `latest` 或本地可变 tag 不可作为生产回滚定位；Compose 引用审核后的 immutable digest。
+
+### 18.21 测试层级与责任
+
+| 层级 | 必测内容 | 运行时机 |
+| --- | --- | --- |
+| 静态/构建 | TS type-check、Go vet、format/lint、OpenAPI 校验、migration lint、secret/dependency/image scan | 每次 PR |
+| 单元/属性/Fuzz | 固定精度、三层计划、DST/时区、FEFO、成本、单位换算、状态机、策略 gate | 每次 PR；关键算法随机/边界集 |
+| DB migration | 空库 up、当前 snapshot upgrade、失败续跑、并发锁、数据对账、contract rehearsal | 每个 migration PR |
+| Integration | PostgreSQL/object/SMTP adapter、事务回滚、租户、幂等、job lease、outbox、删除 | 每次 PR/合并 |
+| API contract | OpenAPI request/response/error、N/N-1 H5、decimal/time、pagination、breaking diff | 每次 PR |
+| H5 component | 表单、状态、错误、权限、键盘/reader 语义、可选埋点关闭 | 每次 PR |
+| E2E | 空账户→建档→计划→今日→库存→撤销；身份、三槽、提醒、导出、删除；mobile/desktop | 合并与 release |
+| 兼容/无障碍 | Chrome/Edge/Safari/Firefox 支持矩阵、320px/200%、axe、键盘、真实 reader | release |
+| 视觉 | MVP/Web 视觉基线、关键页面/状态截图差异，人工确认有意变化 | release；不代替功能验收 |
+| 性能/容量 | Web Vitals、API/DB、并发、large workspace、queue/outbox drain | staging release |
+| 故障/恢复 | DB/object/SMTP/provider/worker 失败、响应丢失、restart、backup restore、alert delivery | staging + 定期演练 |
+| 安全 | 权限矩阵、IDOR/CSRF/XSS/SSRF/upload/abuse、Admin、日志泄密、删除后访问 | release；重大变更专项 |
+| Provider Eval | 30–50 授权真实标签；AI Gold Set/引用/数字/拒答 | 对应 provider/model/prompt/policy 变更 |
+| Production smoke | 同 artifact 的真实 DNS/TLS/session/SMTP/storage/provider/记录/删除/metrics/alerts | canary 每次 release |
+
+代码覆盖率只作为缺口线索，不用单一百分比代替关键状态和失败分支。Q1–Q9、迁移映射和权限矩阵的每条不变量都必须有明确测试或人工证据 owner。
+
+### 18.22 测试数据与证据隔离
+
+- 默认使用合成图片、seed 产品、临时邮箱和临时 workspace；CI 完成后清理。
+- 私密 30–50 图集只放 ignored、加密或受控存储；每张图记录授权目的和 provider，不进入 Git、CI artifact 或普通截图。
+- Staging 不复制生产数据库。必须复现数据形态时使用不可逆生成/脱敏数据，并验证不能回溯个人。
+- E2E 每次生成唯一 subject/idempotency key，失败 artifact 做正文/图片/邮箱清理后才保留。
+- Fake、Mock、Synthetic、Manual、Real evidence 在报告中分栏；同一通过项不能跨栏替代。
+- 截图只证明当时画面；必须和 request/job/fact/版本证据组合，不能单独证明事务或安全。
+
+### 18.23 发布门禁 RG0–RG9
+
+| Gate | 通过条件 | 证据 | 当前完整目标状态 |
+| --- | --- | --- | --- |
+| RG0 合同就绪 | PRD 模块 1–19 确认，OpenAPI/schema/error/权限/迁移/保留冻结 | 评审记录与版本 | 模块 18 待确认，模块 19 未完成 |
+| RG1 可重复构建 | 实际 CI 根激活；check/test/build/scan 全绿；immutable artifacts | CI run、digest、SBOM | launch-beta 历史本地通过；目标未验证 |
+| RG2 迁移安全 | fresh + current snapshot + backfill + cutover rehearsal；锁/对账/rollback point 通过 | migration report、restore point | 未实现目标 migration |
+| RG3 领域/安全正确 | Q1–Q9 适用门槛、租户/幂等/删除/AI 权限全通过 | unit/integration/security report | 现有底座部分通过，目标未全覆盖 |
+| RG4 H5 体验 | 主流程 E2E、支持浏览器、无障碍、视觉与状态通过 | Playwright/WebKit/人工 reader/截图 diff | 当前仅 Chromium launch-beta 局部 |
+| RG5 性能/韧性 | 18.5–18.8 预算、容量、故障注入、observability/alert 演练通过 | load/chaos/dashboard/alert report | 未测目标值 |
+| RG6 外部能力 | 真实 SMTP/storage/provider；识别 30–50 全阈值；R3 AI Gold Set/成本/隐私 | 授权评测与 processor 记录 | 全部生产资源未选/未通过 |
+| RG7 Staging 验收 | 同 digest、production-like migration、backup/restore、全浏览器主链 | staging evidence pack | 未建立真实 staging |
+| RG8 Production Canary | DNS/TLS/secret/preflight/migrate/smoke；小范围无 P0/P1，SLO 内 | canary dashboard、audit、删除核对 | 未部署 |
+| RG9 Production Accepted | 波次完成、错误预算正常、回滚/值班/隐私/资源证据齐全 | release sign-off | 未部署 |
+
+Gate 只能由对应证据关闭；“预计没问题”“代码看起来有”“上次通过”和其他分支/commit 的报告均不能代替。
+
+### 18.24 R1–R4 分批发布门槛
+
+| 批次 | 必须重新执行 | 可暂不启用 |
+| --- | --- | --- |
+| R1 可信闭环 | RG0–RG9 中核心身份、三槽、产品、计划、今日、库存、提醒、删除的全部适用项 | 成本完整 UI、成分理解、笔记、AI、外部通知 |
+| R2 完整管理 | R1 回归 + 成本/成分/导出/笔记/提醒投影、large workspace、导出/删除/保留 | AI、健康上下文、外部通知 |
+| R3 受控智能 | R1/R2 不变量回归 + AI policy/tool/reference/引用/Gold Set/真实 provider/预算/删除 | 不通过的健康字段和跨产品上下文 |
+| R4 扩展 | 核心 API 合同回归 + 新端适配、外部通知真实授权/投递/退订/隐私 | 未验收端或渠道继续隐藏 |
+
+每个新 provider/model、Prompt/Policy、单位换算表、Schedule 算法和 destructive migration 视为高风险变更，重开其对应 Gate；不能因为产品已上线而只做 smoke。
+
+### 18.25 生产发布顺序
+
+```mermaid
+flowchart TD
+  A[冻结 release commit / digest / ChangeSpec] --> B[RG1–RG7 evidence complete]
+  B --> C[备份 + 最近 restore drill 可用]
+  C --> D[API/Worker config preflight + Compose config]
+  D --> E[Expand migration]
+  E --> F[部署兼容 API，先关闭新 capability]
+  F --> G[部署 Worker/consumer，观察 heartbeat/lag]
+  G --> H[部署 H5 hashed assets + no-cache index]
+  H --> I[生产 smoke + final data verify]
+  I --> J[按 cohort 打开 capability]
+  J --> K[Canary 观察]
+  K --> L{门禁/SLO/错误预算?}
+  L -- 失败 --> M[降级/回滚/前向修复]
+  L -- 通过 --> N[扩大波次并完成 RG9]
+```
+
+涉及 final delta 的迁移在 E 前开启公告和写冻结；无语义迁移的常规发布不应强制停机。Edge 只有在 API ready、H5 可用后接流量；production Compose 当前容器 health 主要检查 DB，发布脚本仍必须显式验证 `/api/v1/health/ready` 的 storage/worker/queue，不能只看容器 healthy。
+
+### 18.26 Canary 波次与观察窗口
+
+| 波次 | 范围 | 最短观察 | 晋级条件 |
+| --- | --- | --- | --- |
+| Wave 0 | 合成/内部 workspace | 完整主链一次 + 2 小时 | migration/telemetry/alert/删除无阻断 |
+| Wave 1 | 3–5 个明确 pilot workspace | 24 小时 | 0 P0/P1；核心 SLO、队列/投影、反馈可接受 |
+| Wave 2 | 25% eligible invitation cohort | 72 小时 | 错误预算正常；迁移/数据对账无异常 |
+| Wave 3 | 100% 本批 eligible cohort | 7 日加强观察 | RG9 evidence pack 完整 |
+
+可用账户不足时不伪造样本；按实际数报告并延长定性观察。Pilot 必须知道功能阶段和数据处理，不把内部操作账号混入真实产品指标。
+
+### 18.27 回滚决策树
+
+```mermaid
+flowchart TD
+  A[发布异常] --> B{Q1–Q9/P0 数据或隔离风险?}
+  B -- 是 --> C[立即阻断相关写入/能力]
+  B -- 否 --> D{外部智能/投影可独立关闭?}
+  D -- 是 --> E[关 capability/provider，核心继续]
+  D -- 否 --> F{上一 artifact 兼容当前 schema?}
+  F -- 是 --> G[回滚 API/H5/Worker artifact]
+  F -- 否 --> H[前向修复 migration/code]
+  C --> I{事实已被错误写入?}
+  I -- 否 --> G
+  I -- 是 --> H
+  H --> J{前向修复无法保证安全?}
+  J -- 是 --> K[事故授权后 restore + 评估 RPO 后写入]
+  J -- 否 --> L[验证补偿与恢复]
+```
+
+回滚包在发布前准备，包含上一 digest、当前/上一 schema compatibility、feature flag、停止 Worker/外部调用命令、验证查询和用户沟通模板。数据库恢复是最后手段，不是普通应用 bug 的默认回滚。
+
+### 18.28 备份与恢复验收
+
+首次生产前必须完成：
+
+1. 从生产式 DB 和私有 bucket 生成加密 archive，保存时间、digest、manifest、schemaVersion 和对象 high-water mark。
+2. 将 archive 复制到应用主机/主云账号权限域之外的目的地。
+3. 在名称明确含 drill 的空 DB/空 bucket 恢复；脚本继续拒绝非空或非 drill 目标。
+4. 校验 manifest、表数、对象数和双向引用；运行 migration/version check。
+5. 用恢复环境执行登录、产品读取、intake+撤销、文件授权读取、任务状态和账户删除 smoke。
+6. 测量实际 RPO/RTO，若超过 1h/4h 门槛则不通过。
+7. 销毁 drill 中的私密数据并保留去内容化报告。
+
+之后每季度重复；任何数据库/对象拓扑、加密密钥、备份工具或大迁移变化后额外执行。
+
+### 18.29 外部资源与生产准备清单
+
+以下状态当前均未选择或未验证，必须由实际证据关闭：
+
+| 资源 | 必需证据 |
+| --- | --- |
+| Domain/DNS/HTTPS | 所有权、DNS、生效证书、自动续期、HSTS/安全头、回源限制 |
+| Server/region/network | 供应商/区域、最小权限 SSH/防火墙、时钟同步、补丁、容量 |
+| PostgreSQL | TLS、独立 app/migration/backup 权限、PITR、监控、restore drill |
+| COS/OSS | 私有 bucket、TLS、CORS、生命周期/版本、最小权限、对象删除/恢复 |
+| SMTP | 已验证域名/From、STARTTLS、投递/退信/限流、验证码模板与告警 |
+| Recognition provider | 处理位置/保留/训练条款、密钥、quota、30–50 图全门槛、失败行为 |
+| AI provider（R3） | 同上 + Gold Set、引用/数字、上下文/预算/删除证明 |
+| Monitoring/alerts | 内部 metrics、logs/traces、真实接收方、owner/runbook、告警演练 |
+| Backup destination | 独立权限域、age key 管理、保留/销毁、实际 restore |
+| Admin identity | 真实可恢复邮箱、MFA/step-up、capability、紧急吊销 |
+| Privacy/terms/brand | 实际 processor/保留/删除说明；工作名、域名和对外使用确认 |
+
+凭据“能连通”仍需最小权限、失败、日志、清理/备份和费用验证。任何真实图片、AI 上下文或生产数据发往外部前，必须说明数据、目的地、用途、保留和成本并获得适用授权。
+
+### 18.30 Release Evidence Pack
+
+每次生产发布保留一份不可混淆的证据包：
+
+- release ID、git commit、镜像 digest、build timestamp、ChangeSpec、功能 flag。
+- SBOM、依赖/镜像/secret scan 和例外到期。
+- OpenAPI/schema/migration/Metric/Policy/ReferenceFact 版本与 checksum。
+- RG0–RG9 结果、失败/skip/N/A 原因、测试环境和真实/Fake 分类。
+- migration dry-run/cutover counts、lock、对账、quarantine 与 rollback point。
+- 支持浏览器/设备、无障碍、性能/容量和 visual review 结果。
+- provider datasetVersion/授权/阈值、usage/费用与 processor 条款。
+- config preflight、DNS/TLS、readiness、metrics、alert delivery 和 runbook 演练。
+- backup archive metadata、restore drill、RPO/RTO 和销毁记录。
+- production smoke、canary cohort、错误预算、P0/P1、删除后访问核对。
+- 发布批准者、时间、最终状态和用户沟通。
+
+证据包不保存 secret、私密图片、用户正文或完整生产导出。报告引用受控位置和 hash。
+
+### 18.31 当前实现与完整目标差距
+
+| 领域 | 当前 Launch RC | 完整目标发布要求 |
+| --- | --- | --- |
+| 状态/版本/数据 | 旧单 status、部分 schedule history、当前表 | 模块 15–16 模型、migration/backfill/shadow/对账 |
+| 性能 | 无正式 load/Web Vitals/API SLO 证据 | 18.5–18.6 staging 达标 |
+| 浏览器/无障碍 | Chromium mobile/desktop + overflow | Safari/Firefox/Edge、axe/键盘/reader、320px/200% |
+| API compatibility | 当前 OpenAPI 文档 | contract test、breaking diff、N/N-1 H5、decimal string |
+| Migration | Goose fresh up、migration-before-start | 当前 snapshot upgrade、在线锁预算、backfill/cutover/contract rehearsal |
+| CI | workflow 文件与历史执行逻辑 | 在实际 repo root 激活、branch protection、scan/SBOM/digest |
+| Deployment | Compose/Caddy 可解析 | 真实 DNS/TLS/cloud/SMTP/monitoring，同 digest staging→prod |
+| Health/alerts | readiness/基础 metrics，无接收方 | route/queue/outbox/cleanup、真实 alert/runbook/on-call 演练 |
+| Backup | 加密脚本、未跑真实目的地 | 1h RPO/4h RTO、跨系统对账、异地季度 restore |
+| Recognition | Fake 默认、synthetic 连通、CLI | 授权 30–50 真实图全部阈值、实际 provider 条款/费用 |
+| AI | 完整产品合同，当前未实现 | R3 独立 RG3/RG5/RG6、Gold Set、预算、删除与 disclosure |
+| Production | 无任何生产资源/用户 | Canary 波次 + RG9 才能称已上线 |
+
+### 18.32 验收标准
+
+- Given 当前没有生产用户，When 决定首发，Then 先完成 R1 目标 schema/迁移/staging，不先把 launch-beta 对外称完整产品。
+- Given 历史 `make test` 报告存在，When 评审新 release，Then 只作为旧 commit 证据，新 artifact 必须重新跑适用门禁。
+- Given 本地 `/ready` 和 Fake 三图通过，When 评审生产，Then 仍保持 NOT_DEPLOYED/RG6 open。
+- Given 核心读取在设计容量下 p95=700ms，When 评审 RG5，Then 失败，即使平均值低于 500ms。
+- Given provider 任务 202 已受理但 60 秒后仍无终态，When 计算识别性能，Then 不算成功且进入 p95/超时失败。
+- Given queue 积压后负载停止，When 5 分钟仍未回落，Then 容量/消费者门禁失败。
+- Given DB pool 增大后 API 变快但数据库持续饱和，When 评审，Then 不得用扩连接掩盖查询/容量问题。
+- Given 核心 API 月度 SLO 错误预算耗尽，When 计划功能发布，Then 只允许可靠性/安全修复。
+- Given 备份脚本生成非空 archive，When 未在空 drill 恢复并完成对象引用/业务 smoke，Then 恢复门禁仍失败。
+- Given restore point 比事故晚写入早 40 分钟，When 计划恢复，Then 先列出可能丢失的已确认写入并获得事故授权。
+- Given 生产容器显示 healthy 但 `/ready` 的 storage/worker 失败，When edge/canary 检查，Then 不得晋级。
+- Given Admin 未完成 step-up/MFA，When 尝试 provider 配置、PII reveal 或任务重试，Then 服务端拒绝并审计。
+- Given 上传扩展名为 jpg 但内容不是支持图片，When 服务端校验，Then 拒绝且不写对象/任务。
+- Given 依赖扫描有未豁免 Critical，When 构建其余测试全绿，Then RG1 仍失败。
+- Given H5 在 320px/200% 字体下出现横向滚动，When 桌面正常，Then RG4 仍失败。
+- Given 键盘无法到达永久删除取消按钮，When 鼠标可操作，Then 无障碍门禁失败。
+- Given Safari 当前支持版本无法完成手工建档，When Chromium E2E 通过，Then R1 不能晋级。
+- Given 浏览器缓存旧 H5，When 新 API 发布，Then 旧客户端在兼容窗口仍安全运行或收到受控刷新，不得写错 schema。
+- Given 旧 `products.status=depleted` 且有有效计划，When 迁移，Then catalog=in_cabinet、plan=active、stock=depleted，不把计划静默暂停。
+- Given 旧 product_type=prescription，When 迁移，Then 进入 unsupported_legacy、不可用于今日/AI，不被删除或改成 supplement。
+- Given 旧 priceCny=0 且没有免费证据，When 迁移成本，Then 标 unknown_legacy，不计作 0 元已知成本。
+- Given 旧 workspace 无时区，When 迁移，Then 历史日期不漂移、workspace 标 needs_confirmation；用户确认只影响未来。
+- Given migration backfill 中断，When 重跑，Then 从 cursor 幂等续跑，不重复版本、事件或对象关系。
+- Given migration 命令 exit 0 但库存回放有一条不一致，When 评审 RG2，Then 失败且不 cutover。
+- Given 预计 DDL 锁超过 5 秒，When 没有写冻结计划，Then migration 不得执行。
+- Given final delta rehearsal 超过 15 分钟，When 发布窗口只有 15 分钟，Then 必须拆分，不能直接生产尝试。
+- Given cutover 后投影 UI 缺陷且旧 API 兼容新 schema，When 回滚，Then 先关 flag/回旧 artifact，不 down migration。
+- Given cutover 后出现错误库存事实，When 评估回滚，Then 阻断写入并前向补偿；数据库 restore 仅在无法安全修复且获授权时执行。
+- Given 永久删除已受理，When 应用回滚，Then 旧版本也不得恢复产品/账户写入或可见内容。
+- Given staging 使用和生产不同的新 build，When staging 通过，Then 不能把结果用于生产 artifact；必须晋级同 digest。
+- Given 私密标签出现在 CI artifact/screenshot，When 识别评测通过，Then 安全门禁仍失败并清理泄露。
+- Given 真实识别集只有 12 张，When 所有指标通过，Then 不能关闭 30–50 图生产门禁。
+- Given Wave 1 出现任何 P1，When 错误自动恢复，Then 仍停止晋级并完成原因/回归验证。
+- Given 生产服务已启动但告警接收、restore drill、账户删除核对缺失，When 汇报状态，Then 只能称 DEPLOYED_UNVERIFIED/CANARY，不能称 PRODUCTION_ACCEPTED。
+- Given R3 更换模型但核心代码未改，When 计划发布，Then 仍重开 provider/Gold Set/成本/隐私门禁。
+
+### 18.33 本模块确认点
+
+本模块建议冻结以下上线判断：
+
+1. 当前 Uni 是历史本地验证过的 Release Candidate，不是生产；首发先完成目标 R1 schema 与门禁，不把 launch-beta 抢先上线后再迁移。
+2. 核心 API 初始 SLO 99.5%，读/写 p95 为 500/800ms；识别 p95≤45s；容量、Web Vitals、投影与邮件/AI 另有明确预算。
+3. 生产核心 DB/对象目标 RPO≤1h、整体 RTO≤4h；每日加密异地备份、30 日保留、首次上线前及季度真实 restore drill。
+4. 安全、无障碍、浏览器兼容、低基数 telemetry、供应链和数据保留都是发布门禁，不是上线后再补的文档项。
+5. 当前旧数据使用 Expand–Backfill–Verify–Cutover–Contract；unsupported 药品隔离、未知价格不当 0、历史时区不猜、旧提醒时间不当授权。
+6. 数据库回滚优先 feature flag/兼容旧 artifact/前向修复；不自动 destructive down，restore 只在明确事故授权和数据损失评估后使用。
+7. RG0–RG9 逐级关闭，R1–R4 每批重开适用门禁；同一 immutable digest 从 staging 晋级 production，并按 Wave 0–3 扩大。
+8. 只有真实域名/依赖、告警、备份恢复、provider、canary、删除和证据包全部通过，才能称 `PRODUCTION_ACCEPTED`。
+
+请确认模块 18。确认后，模块 19 将只做风险台账、待决事项、负责人/截止门槛、全文一致性检查和最终验收索引，不再新增功能范围。

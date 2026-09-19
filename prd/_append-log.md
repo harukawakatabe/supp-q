@@ -18,4 +18,5 @@
 | 2026-09-19 | M14 补剂 AI、笔记与健康上下文 | MVP 产品/成分 AI、笔记与健康资料；Uni D-021/D-022、provider 识别边界、shaping 安全规则；已确认 M6–M13 事实合同；个人信息保护与 AI 内容标识现行要求 | 已确认（2026-09-19） | 无 |
 | 2026-09-19 | M15 跨模块业务规则、状态机与异常恢复 | 已确认 M5–M14、Uni 架构/错误/安全/验收与当前任务租约、事务和账本实现、`09-rule-and-data-delta` | 已确认（2026-09-19） | 无 |
 | 2026-09-19 | M16 数据模型、数据流、接口、权限与隐私 | 已确认 M5–M15、Uni migrations/OpenAPI/identity/catalog/recognition 服务、架构/安全/环境边界/外部资源文档 | 已确认（2026-09-19） | 无 |
-| 2026-09-19 | M17 埋点、运营管理与可观测性 | 已确认 M3/M5–M16 指标与事实合同、Uni HTTP metrics/logging/readiness/heartbeat、邀请后台、识别评测 CLI、部署与安全文档 | 待用户确认 | 四类信号分层、最小事件信封与字典、M1–M10 计算、Q1–Q9 对账、运营控制台、任务/Provider/成本、dashboard、metrics/logs/traces、告警与数据最小化 |
+| 2026-09-19 | M17 埋点、运营管理与可观测性 | 已确认 M3/M5–M16 指标与事实合同、Uni HTTP metrics/logging/readiness/heartbeat、邀请后台、识别评测 CLI、部署与安全文档 | 已确认（2026-09-19） | 无 |
+| 2026-09-19 | M18 非功能要求、迁移、上线与验收计划 | 已确认 M1–M17、Uni Makefile/CI/tests/migrations/config、Compose/Caddy、backup/restore/restart 脚本、Acceptance/Status/Handoff/External Resources/Security 文档 | 待用户确认 | 性能与容量、SLO/RPO/RTO、安全/无障碍/兼容、保留期限、旧 schema 迁移、测试矩阵、RG0–RG9、发布波次、回滚与生产证据包 |

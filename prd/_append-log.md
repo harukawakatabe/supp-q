@@ -12,4 +12,5 @@
 | 2026-09-19 | M8 计划规则、计划版本与计划视图 | MVP 计划 PRD/页面、Uni schedule 核心/测试/表结构/API、shaping 规则差距 | 已确认 | 无 |
 | 2026-09-19 | M9 今日执行、补录、临时服用与历史记录 | MVP today/history PRD、Uni intake/Today/记录页/迁移/集成测试、已确认 M8 occurrence 合同 | 已确认 | 无 |
 | 2026-09-19 | M10 多批次库存、FEFO、撤销与风险预测 | MVP 库存/批次/提醒规则、Uni inventory core/迁移/API/页面/测试、shaping 规则差距、已确认 M7–M9 状态与记录合同 | 已确认 | 无 |
-| 2026-09-19 | M11 成本账本 | MVP 费用台账/成本代码与测试、Uni batch/allocation 成本字段与计算、shaping 成本差距、已确认 M10 库存事件合同 | 待用户确认 | unknown/零成本、币种/汇率、净取得成本、历史重述、退款/损耗、库存价值、精度与完整度 |
+| 2026-09-19 | M11 成本账本 | MVP 费用台账/成本代码与测试、Uni batch/allocation 成本字段与计算、shaping 成本差距、已确认 M10 库存事件合同 | 已确认（2026-09-19） | 无 |
+| 2026-09-19 | M12 成分标准化、摄入日历、手工记录与导出 | MVP/Web 成分聚合与 CSV、Uni 产品成分/intake/allocation 代码和数据表、FDA 单位换算指引、`09-rule-and-data-delta`、已确认 M6–M11 事实合同 | 待用户确认 | 批次绑定成分版本、别名/形态边界、单位与 IU、历史重述、手工多成分、日历完整度、CSV 契约 |

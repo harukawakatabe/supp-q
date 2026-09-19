@@ -3280,3 +3280,429 @@ R1 必须先把 unknown 从 0 中拆出来，否则后续任何成本报表都�
 7. 金额使用整数最小币种单位和 decimal 计算；存在未计价数据时返回已知金额、未知数量和覆盖率，不生成伪完整总额。
 
 请确认模块 11。确认后，模块 12 将定义成分标准化、历史成分版本、实际摄入日历、手工成分记录、单位换算、来源拆分与 CSV 导出合同。
+
+## 12. 成分标准化、实际摄入日历、手工记录与导出
+
+### 12.1 模块目标与边界
+
+本模块把用户已经确认的标签成分和真实摄入记录，转化为可追溯的“某天实际记录了哪些成分、各有多少、来自哪里”。它恢复 MVP 中成分日历、来源拆分、手工记录和 CSV 导出能力，但不沿用“读取产品当前成分反算全部历史”的错误实现。
+
+成分理解链必须回答五个不同问题：
+
+1. 包装当时写了什么名称、含量、单位和 Serving Size。
+2. 该标签项被映射到哪个标准成分；是否仍有歧义。
+3. 单位能否转换；使用了哪条换算规则和版本。
+4. 某次真实 intake 从哪些批次扣减，并对应哪些当时有效的配方版本。
+5. 当天聚合是否完整；哪些来源缺少成分或无法换算。
+
+本模块只计算和展示用户记录事实，不提供推荐摄入量、个性化剂量、缺乏/过量诊断、相互作用结论或红黄绿健康评级。这些内容不能借“成分统计”之名提前实现；模块 14 只允许在已确认数据和明确资料边界内提供受控解释。
+
+### 12.2 事实层级与单一事实来源
+
+| 层级 | 权威对象 | 含义 | 禁止替代 |
+| --- | --- | --- | --- |
+| 标签事实 | `IngredientProfileVersion` + `IngredientProfileItem` | 某版包装的每份口径、原文/译文、含量、单位、形态和证据 | OCR 候选、产品当前表单 |
+| 成分身份 | `IngredientDefinition` + `IngredientAliasMapping` | 标签名称对应的标准成分及映射状态 | 前端临时字符串 key、LLM 自行归类 |
+| 换算事实 | `UnitDefinition` + `UnitConversionVersion` | 原单位到标准单位的适用条件、因子、来源和版本 | 无条件把所有 IU 或等价单位互转 |
+| 摄入事实 | 有效 `IntakeRecord` + `IntakeAllocation` + Batch | 何时实际摄入多少、从哪个批次扣减 | 计划任务、当前产品默认剂量 |
+| 手工事实 | `ManualIngredientIntake` + items | 不属于补剂柜产品的一次实际成分摄入 | 伪造 Product 或库存事件 |
+| 派生明细 | `IngredientContribution` | 一次 intake allocation 或手工 item 对标准成分的贡献与计算快照 | 独立于来源随意修改的“当天总量” |
+| 日聚合 | contribution 的服务端投影/缓存 | 指定工作区日期的合计、来源和完整度 | 永久保存且无法重放的第二份汇总真相 |
+
+成分日历只统计 `active` 的真实记录。计划命中、提醒送达、今日待办或预计服用都不能产生实际摄入；撤销后原 contribution 保留审计关系但退出当前聚合。
+
+### 12.3 核心对象合同
+
+| 对象 | 关键字段 | 规则 |
+| --- | --- | --- |
+| `IngredientDefinition` | `id`、中文标准名、英文标准名、上位类别、可识别形态 | 标准身份稳定；“化合物/形态”和“所含营养素”不得靠字符串相似自动等同 |
+| `IngredientAliasMapping` | alias 原文、语言、definitionId、scope、status、source、version | 系统词典受控发布；用户修正默认只作用于自己的工作区和指定资料版本 |
+| `IngredientProfileVersion` | productId、version、servingQuantity、servingUnit、status、changeKind、evidence、createdAt | 不可变；保存完整、部分或用户确认无结构化成分三种事实 |
+| `IngredientProfileItem` | 原文名、中文名、labelAmount、labelUnit、definitionId、mappingStatus、form、`%DV`、证据引用 | 原文与标准化结果并存；缺含量不静默删除 |
+| Batch 关联 | `ingredientProfileVersionId` | 每个实际批次明确引用配方版本；补货时从当前版本预填但由用户确认 |
+| `UnitConversionVersion` | ingredientId、fromUnit、toUnit、factor/formula、适用形态、来源 URL/版本、状态 | 版本化且可审计；不满足适用条件时禁止转换 |
+| `IngredientContribution` | intakeId、allocationId/batchId、profileItemId、原始量、标准量、单位、换算版本、calculatedAt、status | 使用 decimal string；保存计算快照并可重述 |
+| `ManualIngredientIntake` | occurredAt、sourceName、note、status、idempotencyKey、correctionOf | 一次手工事件可包含多项成分；不创建库存变化 |
+| `IngredientAggregateRevision` | 范围、原因、旧/新版本、状态、完成时间 | 配方纠错、映射纠错或换算纠错触发可审计重述 |
+
+`IngredientProfileVersion.status`：
+
+- `complete`：用户确认每份口径和所有保留项均可用于计算。
+- `partial`：已确认标签，但至少一项缺含量、单位、身份或换算；已知项可以计算，页面必须显示不完整。
+- `confirmed_empty`：用户明确确认本次不保存结构化成分；不是识别失败，也不能显示成“0 种成分”。
+
+OCR/LLM 候选在确认前不进入上述业务事实。用户确认后，候选来源、原文、翻译和证据关系继续保留，但统计读取的是确认版本。
+
+### 12.4 从记录到日聚合的主流程
+
+```mermaid
+flowchart TD
+  A[有效 IntakeRecord] --> B[IntakeAllocation]
+  B --> C[实际 Batch]
+  C --> D[批次关联 IngredientProfileVersion]
+  D --> E[逐项按每份口径计算]
+  E --> F{身份与单位可标准化?}
+  F -- 是 --> G[写入 IngredientContribution 快照]
+  F -- 否 --> H[写入未映射或不可换算贡献]
+  M[有效 ManualIngredientIntake] --> N[逐项身份与单位处理]
+  N --> G
+  N --> H
+  G --> I[按工作区本地日期聚合]
+  H --> I
+  I --> J[日总量 来源拆分 完整度]
+  J --> K[成分日历与 CSV 使用同一查询]
+```
+
+一次产品 intake 若跨两个批次且两个批次引用不同配方版本，必须按 allocation 分别计算后再聚合；不能取产品当前配方，也不能只取第一批次。补录记录使用模块 10 已裁决的真实 allocation；用户显式选择历史真实批次时，成分也随该批次版本计算。
+
+### 12.5 配方版本、批次绑定与历史保护
+
+#### 新建与补货
+
+1. 初次确认产品时原子创建首个 `IngredientProfileVersion`；即使用户确认无结构化成分，也创建 `confirmed_empty` 版本以保存这一决定。
+2. 有 opening batch 时，该批次绑定首个成分版本；当前无库存时只保留产品版本，后续首批补货再确认绑定。
+3. 新增批次默认建议当前成分版本，并展示版本摘要；若新瓶标签不同，用户必须先处理为新产品或新版本，再入库。
+4. 一个批次绑定后不因“当前版本”改变而自动改绑。
+
+#### 标签变化与资料纠错
+
+| 用户意图 | 默认处理 | 历史影响 |
+| --- | --- | --- |
+| 新包装但配方、每份口径和管理单位均未变 | 沿用原版本，可新增证据版本 | 不重算历史 |
+| 配方、含量、Serving Size、剂型或管理单位实质变化 | 按模块 7 默认新建 Product | 原产品历史完全不变 |
+| 用户明确把新配方留在同一 Product | 创建 `new_formula` 版本，只绑定用户指定的新批次 | 旧批次和旧 intake 不变 |
+| 过去录错名称、含量、单位、漏项或 Serving Size | 创建 `correction` 版本，选择被纠正的批次/时间范围并展示受影响记录数 | 对关联 active contribution 做审计重述 |
+| 无法判断是新配方还是旧资料录错 | 不保存覆盖；保留草稿并要求用户选择 | 不改变任何聚合 |
+
+成分版本不可原地修改或删除。纠错完成后，成分日历默认展示当前纠正后的结果，并在受影响日期提供“已因资料纠错更新”的说明；审计详情保留 as-recorded 快照、纠错版本、操作人和时间。
+
+### 12.6 摄入量计算与完整度
+
+每笔产品来源 contribution：
+
+```text
+某 allocation 的标签项摄入量
+  = 标签每份含量 × allocation 数量 ÷ 该版本 servingQuantity
+
+某次 intake 的该成分摄入量
+  = 该 intake 全部 allocation 对应 contribution 之和
+
+当天该标准成分/可兼容单位组总量
+  = 当天全部 active 产品 contribution + active 手工 contribution
+```
+
+计算前提：`servingUnit` 必须与产品管理单位同维度且关系明确。若标签为“每 2 粒”、管理单位为“粒”，可直接计算；若标签为“每勺”而库存单位为“克”且没有用户确认换算关系，则该来源为 `uncomputable_serving_relation`，不能假设 1 勺 = 1 克。
+
+日聚合返回：
+
+| 字段 | 说明 |
+| --- | --- |
+| `displayGroups[]` | 按标准成分 + 可兼容计量维度分组后的已知量 |
+| `activeSourceRecordCount` | 当天有效 intake 和手工事件数量；不是产品数量 |
+| `knownContributionCount` | 已成功映射和计算的明细数 |
+| `unknownContributionCount` | 缺配方、缺含量、映射歧义、单位不兼容等明细数 |
+| `completenessStatus` | `complete / partial / unknown` |
+| `calculatedAt`、`aggregateRevision` | 计算时间与投影版本 |
+
+存在未知 contribution 时，页面可以展示已知合计，但必须同时写明“至少 N 条来源未计入”；不得把已知合计命名为“当天全部摄入”。没有成分资料的产品 intake 仍显示为一个未计价来源，不得被日历静默吞掉。
+
+日历角标统计 `displayGroups` 数，而不是原始标签行数；同一成分因单位不可兼容而拆成两组时，角标按两项显示，并在详情解释拆分原因。
+
+### 12.7 标准名称、别名与形态边界
+
+标准化目标是合并确实相同的事实，不是尽量把名称压成少数大类。
+
+1. `Niacin`、`烟酸`、`Vitamin B3` 可以通过受控别名映射到同一标准实体。
+2. 大小写、全半角、连字符和空白可做确定性文本规范化，但文本相似不等于成分相同。
+3. `EPA + DHA` 组合项、单独 EPA、单独 DHA、`Omega-3` 总量是不同标签事实；没有可证明拆分时不能互相替代或重复相加。
+4. `Magnesium 200 mg (as magnesium glycinate)` 可记录标准营养素“镁”并把 glycinate 保留为形态；只有 `Magnesium glycinate 500 mg` 时，不能擅自当作 500 mg 元素镁。
+5. proprietary blend 只把包装明确给出的混合物总量作为一项；内部成分没有各自含量时只列名称，不均分总量。
+6. 用户确认的别名修正默认只影响其工作区内选中的资料版本；不能把个人判断发布成全局词典。
+7. 规则或 AI 可以提出候选映射，但 `ambiguous/unmapped` 项必须由用户确认后才能与其他来源合并。
+
+映射状态固定为 `exact`、`alias_matched`、`user_confirmed`、`ambiguous`、`unmapped`。原文名称和用户看到的译名永远保留，标准名不能覆盖标签证据。
+
+### 12.8 单位、换算和精度
+
+| 单位族 | 首期规则 | 聚合方式 |
+| --- | --- | --- |
+| 质量 | `g`、`mg`、`μg/mcg/ug/微克` 确定性互转 | 标准基底为 `mg`，展示可自适应为 g/mg/μg |
+| 国际单位 | `IU` | 只有成分、形态和官方规则同时匹配时转换；否则保留 IU 组 |
+| 活菌数量 | `CFU` | 仅与 CFU 相加，不与质量或“粒”相加 |
+| 酶活性等 | `FU`、`HUT` 及其他明确活性单位 | 每种单位独立聚合；没有规则不互转 |
+| 等价值 | `μg DFE`、`mg NE`、`mg α-TE` 等 | 作为独立语义单位；不得去掉后缀当普通 μg/mg |
+| 比例 | `%DV` | 作为标签参考字段保存，不作为实际摄入量相加 |
+| 未知/自定义 | 原样保存 | 显示但标记不可聚合 |
+
+维生素 D 的首期特定规则采用 `1 μg = 40 IU`，标准聚合量使用 μg，标签 IU 可转换后合并并在详情显示 IU 等价值；标签原单位仍保留。该规则只适用于已映射为维生素 D/D2/D3 且标签语义明确的项目。维生素 A、维生素 E、叶酸和烟酸等受形态或等价值语义影响的项目，在缺少完整条件时保持原单位组，不套用通用因子。
+
+该因子与适用范围以 [FDA《Converting Units of Measure for Folate, Niacin, and Vitamins A, D, and E》指引](https://www.fda.gov/regulatory-information/search-fda-guidance-documents/guidance-industry-converting-units-measure-folate-niacin-and-vitamins-d-and-e-nutrition-and) 为首期来源；系统仍保存来源版本，不能把本条规则扩张为“所有 IU 通用换算”。
+
+精度合同：
+
+- 数据库数量和换算因子使用 decimal/numeric，API 以 decimal string 返回；不得通过 JSON number/JavaScript `Number` 作为权威计算链。
+- 中间计算不舍入，先按精确值合计，再在展示层格式化。
+- 质量展示沿用简洁规则：绝对值小于 1 mg 时优先显示 μg，达到 10,000 mg 时优先显示 g，其余显示 mg。
+- 普通页面默认最多 3 位小数；若非零值会显示为 0，则扩展到最多 6 位或使用科学记数法。详情与 CSV 保留服务端精确 decimal string。
+- 负数不能作为摄入量录入；撤销通过状态和反向投影表达，不保存负的手工剂量。
+
+换算表必须记录发布机构、来源 URL、文件/规则版本、录入时间和适用条件。修改换算因子分为“旧规则录错”的 correction 与“新规则开始采用”的新版本，不能无审计地重算全部历史。
+
+### 12.9 成分日历与日期详情
+
+“成分”保持模块 4 已确认的一级入口，默认打开今天并保留用户本次会话最后选择的日期。
+
+| 区域 | 内容 | 操作 | 状态 |
+| --- | --- | --- | --- |
+| 顶栏 | 成分、当前日期、导出入口 | 打开导出 | 正常/生成中/失败 |
+| 日期导航 | 前一天、后一天、展开月历 | 切日、切月 | 未来日期不可作为实际摄入日选择 |
+| 月历 | 每日 display group 数、partial 标记 | 选择日期 | 无记录/完整/不完整/加载失败 |
+| 日摘要 | 已知成分组数、有效来源记录数、未知明细数 | 查看缺失原因 | `complete/partial/unknown` |
+| 成分列表 | 标准名、标准量、标签原单位提示、来源数 | 展开来源 | 单来源/多来源/不可兼容拆组 |
+| 来源详情 | 产品/手工来源、发生时间、记录量、批次、配方版本、换算式 | 跳转记录或产品 | active/已更正说明 |
+| 补记入口 | 从补剂柜记录；单独成分手工记录 | 进入对应表单 | 不在一个按钮后混淆两种账本 |
+
+页面只展示实际记录，不在未来日期绘制计划剂量。计划成分属于模块 8 的计划日历；若未来计划需要显示成分，必须明确标注“计划”，不得进入本模块日合计或导出。
+
+页面不显示“达标”“过量”“安全”等结论，也不拿 `%DV`、RDA、AI 或 UL 给个人打分。来源明细必须能展开计算，例如：
+
+```text
+产品 A · 2026-09-19 08:30
+记录 1 粒 ÷ 标签每份 2 粒 × 镁 200 mg = 100 mg
+配方 v2 · 批次 B-202609 · 无额外换算
+```
+
+### 12.10 从补剂柜补记与临时服用
+
+成分页选择“从补剂柜记录”时，必须复用模块 9 的正常 intake 命令：
+
+1. 选择产品、发生日期/时间、实际数量和可选批次。
+2. 服务端执行同一幂等、库存检查、FEFO/手工批次 allocation 和事务规则。
+3. 成功后同时出现在记录历史、库存账本和成分日历。
+4. 撤销时精确恢复库存并移除当前成分聚合。
+
+不得为了从成分页操作而创建只存在于成分日历的“产品来源手工成分”。产品已在补剂柜但用户不想扣库存时，应先判断是否是之前已记录；不能用手工成分绕过库存一致性。
+
+### 12.11 单独手工成分记录
+
+只有未作为补剂柜产品管理的真实摄入，才创建 `ManualIngredientIntake`。一次事件支持一项或多项成分，适合记录一包未建档复合粉、单独营养素或临时来源。
+
+必填和限制：
+
+| 字段 | 要求 |
+| --- | --- |
+| 发生日期/时间 | 不晚于工作区当前时间；按用户时区保存发生时间和本地日期 |
+| 来源名称 | 必填，默认建议“手工记录”，最多 120 字符 |
+| 成分 items | 至少一项；每项名称非空、数量大于 0、单位非空 |
+| 标准映射 | 明确匹配可直接展示；歧义项要求用户选择或保持 unmapped |
+| 备注 | 选填，最多 500 字符 |
+| 幂等键 | 客户端稳定生成；重复提交返回同一事件 |
+
+手工记录不改变产品完成状态、计划、库存或成本。保存成功后返回所选日期并高亮新来源。
+
+编辑采用“纠正”而非原地覆盖：原事件转为 `corrected`，新事件通过 `correctionOf` 关联并进入聚合；撤销转为 `revoked`。重复撤销无副作用。纠正日期、单位或映射时，旧日与新日聚合在同一事务后失效/重算，不能一边成功一边失败。
+
+若用户连续多次记录相同来源，界面可以建议“加入补剂柜以便管理计划和库存”，但不得自动建产品或合并历史。
+
+### 12.12 来源拆分与可解释计算
+
+每个成分组按以下层级展示来源：
+
+1. 产品来源：产品显示快照 → intake 发生时间与数量 → allocation 批次 → 成分版本 → 原始标签项 → 换算步骤。
+2. 手工来源：来源名称 → 发生时间 → 原始输入 → 映射与换算步骤。
+3. 同一产品当天多次记录默认在产品名下折叠，但次数和每次贡献可展开，不把多次 intake 合并成无法撤销定位的一行。
+4. 产品后续改名不改变历史导出的 `productNameSnapshot`；当前页面可同时提供当前名称链接。
+5. 来源被纠正、撤销或产品永久删除后，当前聚合立即更新；普通归档不影响历史来源。
+
+用户看到的总量必须能由展开后的 contribution 精确相加得到。页面不得展示一个服务端总数、来源却使用前端另一套换算。
+
+### 12.13 纠错、重述与并发
+
+触发重述的动作包括：
+
+- 纠正成分版本的 Serving Size、含量、单位或漏项。
+- 将 ambiguous/unmapped 项人工映射到标准成分，或纠正错误映射。
+- 纠正一条适用于既有 contribution 的换算规则。
+- 更正 intake 的数量、批次或发生时间。
+- 更正或撤销手工成分事件。
+
+重述要求：
+
+1. 创建 `IngredientAggregateRevision`，先计算全部受影响 contribution，再原子切换活动 revision。
+2. 重述失败时继续展示上一完整 revision 并明确提示；不能混合部分新旧结果。
+3. 保存 as-recorded 快照和变更原因；当前日历默认展示最新已完成纠错结果。
+4. 只影响明确关联的工作区、产品版本、批次、记录和日期；用户别名修正不能跨租户扩散。
+5. 同一对象并发纠错使用版本号/`updatedAt` 拒绝静默覆盖，并保留本地草稿。
+6. 新发布的转换规则默认只用于之后确认的资料；只有被定义为旧规则 correction 并经过迁移审计时才重述历史。
+
+日聚合缓存只是可丢弃投影。任何来源事实变化都通过 revision/invalidation 重新生成；客户端不得自行维护一份长期累计总量。
+
+### 12.14 CSV 导出合同
+
+成分页提供最近 30 天、当前显示月份和自定义起止日期三个预设。范围是工作区本地日期闭区间，界面和导出使用同一查询、同一 aggregate revision 和同一单位规则。
+
+默认导出文件为 UTF-8 BOM、RFC 4180 引号规则、CRLF 换行的 `ingredient-intake-v1.csv`。一个文件使用 `row_type` 同时表达总量和来源，避免两个文件口径漂移：
+
+| 字段 | `total` 行 | `source`/`incomplete_source` 行 |
+| --- | --- | --- |
+| `schema_version` | `ingredient-intake-v1` | 同左 |
+| `row_type` | `total` | `source` 或 `incomplete_source` |
+| `local_date`、`timezone` | 必填 | 必填 |
+| `ingredient_id`、`ingredient_name` | 标准分组；未映射时使用稳定临时 ID | 对应来源项 |
+| `amount`、`unit` | 当日该兼容组精确总量 | 本 contribution 精确量；不可计算时留空 |
+| `completeness_status` | `complete/partial/unknown` | 具体失败码或 `complete` |
+| `source_type`、`source_record_id`、`occurred_at` | 留空 | `product/manual`、记录 ID、发生时间 |
+| `product_id`、`product_name_snapshot`、`batch_id` | 留空 | 产品来源填写；手工来源留空 |
+| `ingredient_profile_version_id` | 留空 | 产品来源填写 |
+| `original_name`、`original_amount`、`original_unit` | 留空 | 标签或手工原始值 |
+| `conversion_rule_version` | 聚合涉及多个时可写 `mixed` | 实际规则；未转换写 `none` |
+| `source_name`、`note` | 留空 | 手工来源或记录备注 |
+| `aggregate_revision`、`exported_at` | 必填 | 必填 |
+
+每个日期/成分/兼容单位组先输出一行 `total`，再输出其来源行；未计入总量的来源输出 `incomplete_source`，不能从 CSV 消失。默认只导出当前 `active` 结果，撤销/纠错审计由账户级完整导出提供，避免普通 CSV 与页面当前统计不一致。
+
+导出规则：
+
+- 文件名：`小补Q-成分摄入-YYYY-MM-DD_YYYY-MM-DD.csv`。
+- 数量使用十进制小数点且不加千分位；日期为 ISO 8601；时间同时带 offset 和 timezone 字段。
+- 以 `= + - @` 开头的用户文本按 CSV 公式注入防护规则转义；数值列仍保持纯数值字符串。
+- 无数据时不生成“成功空文件”，页面说明范围内没有记录。
+- 普通同步导出上限为 366 个自然日；更大范围转为私有 `ExportJob`，显示排队、生成中、完成、失败和过期。
+- 下载 URL 短时授权且 `private, no-store`；导出文件到期删除，不能使用公开可猜地址。
+- Demo 可预览导出行和范围，但不下载文件；注册用户只能导出自己的工作区。
+
+此 CSV 是成分页面的分析导出，不替代模块 5 的账户级完整导出；后者仍需包含撤销状态、版本、证据和其他领域数据。
+
+### 12.15 接口与服务端计算边界
+
+精确路径在模块 16 固定，本模块先冻结能力合同：
+
+| 能力 | 输入 | 输出/副作用 |
+| --- | --- | --- |
+| 月摘要 | month、timezone、aggregateRevision 可选 | 每日 group 数、来源数、完整度；不返回整月全部明细 |
+| 日详情 | localDate、timezone | groups、source contributions、换算解释、未知原因、revision |
+| 创建手工事件 | occurredAt、source、items、note、幂等键 | 原子创建事件和 contributions，返回更新后的日 revision |
+| 纠正/撤销手工事件 | eventId、expectedVersion、replacement 可选 | 原子切换状态并使相关日期投影失效 |
+| 保存成分版本 | productId、changeKind、批次范围、items、expectedVersion | 创建不可变版本；按规则绑定批次或发起重述 |
+| 导出 | 范围、timezone、schemaVersion | 同步 CSV 或 ExportJob；内容与日详情同 revision |
+
+所有聚合、单位转换、来源拆分和完整度判断由服务端领域层执行。H5 只负责输入、展示和下载，不能复制 MVP/Web 的 JavaScript 计算器成为第二套权威。
+
+月摘要和日详情必须支持条件请求或 revision 缓存；切换日期不应重新拉取全部产品和全部 intake。大范围计算使用批量查询/物化投影，禁止对每天、每条记录产生 N+1 查询。
+
+### 12.16 权限、隐私与数据生命周期
+
+- 产品成分版本、别名修正、手工记录、日聚合、导出任务和下载均同时校验 `user_id + workspace_id`；只知道 ID 不构成授权。
+- 本模块的确定性标准化和导出不调用外部 OCR/LLM/AI；查看成分页不会把个人摄入发送给第三方。
+- 管理员只能查看导出任务状态和非敏感错误，不能读取 CSV、成分、产品或备注内容。
+- 私有 CSV 到期物理删除；任务元数据只保留最小状态、时间、范围和非敏感错误码。
+- 账户删除级联清理成分版本、用户别名、手工事件、contribution、revision、导出文件和任务。
+- 产品归档保留历史成分和聚合；产品永久删除按模块 7 明示地移除相关历史贡献并重算受影响日期。
+- 运维日志不得写入完整成分数组、手工备注、CSV 行或用户自由文本。
+
+### 12.17 异常与恢复
+
+| 异常 | 用户结果 | 系统要求 |
+| --- | --- | --- |
+| 产品 intake 没有成分版本 | 日期仍显示该来源，但标为“未录入成分，合计不完整” | 不按 0 处理，不读取当前产品猜测 |
+| 某项缺含量或 Serving Size | 显示原文项和缺失原因 | 其他可计算项仍展示，整体为 partial |
+| 别名存在多个候选 | 不自动合并，提示选择或保持未映射 | 候选有来源，不由 LLM 直接落最终事实 |
+| 单位未知或不兼容 | 单独显示原单位组 | 不转换为 mg，不静默丢弃 |
+| conversion 服务失败 | 显示上一完整 revision 或原始量 | 不返回部分新总量 |
+| 配方纠错重述失败 | 保持旧日历结果并显示“更新失败，可重试” | revision 记录失败与可重试原因 |
+| 月摘要失败 | 页面壳和已选日期保留，提供重试 | 不显示为整月无记录 |
+| 日详情部分未知 | 已知数据和未知来源同时显示 | 不把 partial 写成 complete |
+| 手工提交网络超时 | 保留表单并查询幂等结果 | 不重复创建两次摄入 |
+| 并发编辑冲突 | 展示远端版本差异并保留本地草稿 | 拒绝最后写入覆盖 |
+| CSV 生成失败/过期 | 显示重试或重新生成 | 不提供截断文件冒充成功 |
+| CSV 范围无数据 | 明确说明没有有效记录 | 不下载只有表头的成功文件 |
+
+### 12.18 当前实现与目标差距
+
+| 能力 | MVP/Web 历史实现 | 当前 Uni（代码核对） | 目标处理 |
+| --- | --- | --- | --- |
+| 聚合来源 | 从 active logs + 当前产品 ingredients + 手工记录计算 | 无成分聚合接口或页面 | 改为 intake allocation → batch → profile version + manual event |
+| 历史保护 | 产品当前成分变化会改变旧记录结果 | `product_ingredients` 只有当前态，PUT 时删除重建 | 不可变 profile version、批次绑定和纠错重述 |
+| 多成分建档 | MVP 可保存数组；Web 有基础解析 | 新增页把整段文本截成最多 80 字的一项，含量 > 0 才保存 | 使用模块 6 完整 `ingredients[]` 确认合同 |
+| 标准名称 | 本地别名表，MVP 还会在运行时“学习”映射 | 仅去标点/小写生成字符串 key | 受控标准实体、版本化别名、歧义和用户确认 |
+| 单位 | JS `Number`；质量单位和 D 的硬编码 IU 换算 | 只保存任意 unit 文本，无换算层 | decimal、单位族、适用条件和换算版本 |
+| 手工记录 | localStorage 单项日志；可撤销逻辑有限 | 无对象、API 或页面 | 服务端多项事件、幂等、纠正链、撤销 |
+| 日历 | MVP 完整本地月历/来源页 | 五入口中尚无成分页 | 服务端月摘要 + 日详情，恢复一级入口 |
+| 完整度 | 缺成分的产品记录会被静默忽略 | 无相关状态 | known/unknown counts + complete/partial/unknown |
+| 来源解释 | MVP 展示产品/手工来源，但不锁定批次配方版本 | intake 有 allocation，但没有成分快照 | contribution 保存批次、版本、原值和换算链 |
+| CSV | 浏览器生成简单日期/成分/总量/来源字符串 | 无成分导出 | 固定 v1 schema、总量/来源行、私有导出任务和安全转义 |
+| API 精度 | JSON number | PostgreSQL numeric，但 Go/前端多处转 float64/number | 权威 API 改为 decimal string，前端只格式化 |
+
+MVP/Web 继续作为交互和测试案例来源，不能把其 localStorage 状态、动态别名学习、当前配方反算或前端 CSV 直接搬入 Uni 生产链。
+
+### 12.19 迁移策略
+
+1. 现有 `product_ingredients` 按产品创建 `legacy_import` profile version，保留原 name/key/amount/unit；不得因为 key 相同就直接认定标准实体。
+2. 现有 `ingredient_serving_quantity` 迁入版本的 servingQuantity，servingUnit 使用产品管理单位并标记 `legacy_assumed_same_unit`，在用户首次编辑时提示核对。
+3. 现有批次全部绑定迁移生成的版本；若产品没有成分行，则创建 `partial`，不能推断为用户确认无成分。
+4. 历史 intake 只在其 allocation 批次已绑定有效版本时回填 contribution；无法确认的记录作为 unknown source 保留。
+5. 不从产品当前成分回填已永久删除批次、缺 allocation 的外部旧记录或手工来源。
+6. MVP/Web localStorage 的 manualIngredientLogs 和别名库只作为用户可选导入候选；逐项显示日期、来源、原名、量和单位，确认后才进入 Uni。
+7. 导入发现重复时用来源 ID/日期/内容指纹提示，不自动合并；用户确认导入命令保持幂等。
+8. 迁移完成后运行守恒审计：每个 active intake allocation 要么产生可计算 contribution，要么产生明确 unknown 原因；禁止静默缺行。
+
+### 12.20 交付顺序
+
+#### R1：先修正确认数据和历史基础
+
+- 完整多成分确认 payload，不再压缩为单一文本。
+- `IngredientProfileVersion`、items、批次绑定和迁移。
+- 质量单位规范化、标准身份候选和 decimal API。
+- intake contribution 快照、撤销同步和完整度状态。
+- 产品详情可查看当前/历史成分版本及证据。
+
+#### R2：完成用户可见闭环
+
+- 成分一级入口、月摘要、日详情、来源与换算解释。
+- 受控别名、Vitamin D 特定换算、不可兼容单位拆组。
+- 从补剂柜记录复用 intake；单独多成分手工记录、纠正和撤销。
+- 配方/映射纠错重述与 revision。
+- 30 天、当前月、自定义范围 CSV；长范围 ExportJob。
+- 完整度、迁移审计、权限、集成测试与浏览器 E2E。
+
+#### R3/R4：在不改变本模块事实边界下增强
+
+- 扩充有正式来源和完整适用条件的换算规则。
+- 更强的候选别名建议、批量人工核对和导出格式。
+- 模块 14 可读取本模块已确认快照做引用式解释，但不能写回标准量或替用户裁决映射。
+
+### 12.21 验收标准
+
+- Given 一瓶标签为每 2 粒含镁 200 mg，When 用户记录 1 粒，Then 当天贡献为 100 mg，并展示完整算式。
+- Given 一次 intake 跨两个配方不同的批次，When 查看成分来源，Then 分别按两个批次版本计算后相加，不读取产品当前配方。
+- Given 用户把产品当前配方从 100 mg 改为 200 mg 并选择“新配方”，When 查看旧 intake，Then 旧结果保持 100 mg 版本。
+- Given 用户纠正旧版本原本录错的 100 mg 为 120 mg，When 重述成功，Then 受影响 active 历史变为 120 mg 口径，并可查看 as-recorded 值。
+- Given `Niacin` 与 `烟酸` 均经确认映射同一实体且单位兼容，When 同日摄入，Then 合并为一个总量并保留两个来源。
+- Given `EPA + DHA 600 mg` 与 `EPA 360 mg`、`DHA 240 mg` 同时出现，When 未确认前者是总量还是重复展示，Then 系统不自动拆分或三者相加。
+- Given 标签为维生素 D3 25 μg、另一来源为 400 IU，When 规则条件成立，Then 标准量合并为 35 μg，并在详情保留 25 μg、400 IU 及换算版本。
+- Given 维生素 E 以 IU 和 mg 两种单位出现且形态不足，When 聚合，Then 分成两个单位组，不使用维生素 D 因子或通用 IU 因子。
+- Given 某产品有有效 intake 但没有成分资料，When 打开当天日历，Then 显示未知来源和 partial/unknown，不显示虚假的“0 种且完整”。
+- Given 用户从成分页选择柜内产品补记，When 保存，Then 生成正常 intake、扣减库存并进入记录和成分日历；不创建 manual ingredient 伪记录。
+- Given 用户手工记录一个含两项成分的临时来源，When 保存，Then 两项共享同一事件和来源，且不改变任何产品库存或今日计划完成状态。
+- Given 用户纠正手工记录日期，When 事务完成，Then旧日和新日聚合同时更新；失败时两边均保持原状。
+- Given 用户撤销产品 intake，When 再次查看日期和 CSV，Then 相关 contribution 从当前总量和默认导出中移除，库存按原 allocation 恢复。
+- Given 同一成分有 mg 和 CFU 且无转换规则，When 查看当天，Then 分成两个明确单位组，Q9 不兼容单位静默相加事件为 0。
+- Given 导出 2026-09-01 至 2026-09-30，When CSV 完成，Then 日期范围含首尾两日，total/source/incomplete_source 与同 revision 页面结果可重算一致。
+- Given 来源名称以 `=` 开头，When 导出 CSV，Then 单元格被公式注入防护处理，不影响数值列。
+- Given 用户 B 获得用户 A 的成分、手工事件或 export ID，When 请求查看、修改或下载，Then 返回不泄露资源存在性的拒绝结果。
+- Given 重述或导出任务中途失败，When 用户刷新页面，Then 仍能看到上一完整日历结果或失败任务，并可安全重试。
+
+### 12.22 本模块确认点
+
+本模块建议冻结以下产品判断：
+
+1. 历史成分必须沿 `intake allocation → batch → ingredient profile version` 计算，禁止读取产品当前成分反推旧记录。
+2. 配方版本不可变并绑定批次；新配方默认新建产品，资料录错才对指定历史做带审计重述。
+3. 同义名只在受控映射或用户确认后合并；组合成分、元素量与化合物量、proprietary blend 不做猜测拆分。
+4. 质量单位可以确定性互转；IU 等必须使用成分/形态特定版本规则。首期 Vitamin D 标准量用 μg，IU 作为可追溯等价值。
+5. 成分日历只统计实际 active intake 和手工事件；计划数据不进入实际摄入。
+6. 柜内补记必须复用正常 intake 并联动库存；单独手工成分不改变产品、计划、库存或成本。
+7. 缺成分、缺含量、映射歧义或单位不兼容都计入完整度并显示来源，unknown 不等于 0。
+8. CSV 使用固定 v1 schema，在同一文件中提供 total、source 和 incomplete_source 行；范围、时区、换算和页面保持同一 revision。
+
+请确认模块 12。确认后，模块 13 将定义站内提醒、全局默认与单品覆盖、时区、提醒生成/去重、低库存与临期触达，以及 H5 通知权限边界。

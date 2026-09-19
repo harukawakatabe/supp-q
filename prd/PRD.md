@@ -4546,3 +4546,481 @@ MVP/Web 继续作为交互和样例来源，但其硬编码参考值、整包健
 8. AI 关闭、失败、超额或延后都不能影响补剂柜、计划、记录、库存、成本、成分、提醒和手工笔记。
 
 请确认模块 14。确认后，模块 15 将统一模块 5–14 的跨模块业务规则、状态机、时间与版本边界、并发冲突及异常恢复。
+
+## 15. 跨模块业务规则、状态机与异常恢复
+
+### 15.1 模块目标与适用原则
+
+本模块不新增业务功能，而是把模块 5–14 已确认的身份、识别、产品、计划、记录、库存、成本、成分、提醒、笔记和 AI 合同统一成一套可执行规则。其目标是防止某个页面为了方便，重新解释另一个领域的状态或在失败时制造半完成数据。
+
+全产品遵守以下优先级：
+
+1. 用户/工作区归属和授权先于资源读取与业务判断。
+2. 已提交的业务事实先于缓存、投影、提醒和 AI 文本。
+3. 不可变历史版本先于“当前配置”反推历史。
+4. 账本事件与原子事务先于页面本地状态。
+5. 明确的 unknown、partial、stale 或 failed 先于伪造 complete、empty 或 safe。
+6. 同一写动作先解决幂等与并发，再触发异步重算和触达。
+7. 异步消费者失败不能回滚已经成功的核心事实，但必须可重放、可告警并向用户显示数据新鲜度。
+
+模块 5–14 中更具体的领域规则继续有效；本模块只在跨模块衔接处规定解释顺序，不借机修改已确认的业务公式。
+
+### 15.2 状态必须带领域命名空间
+
+`active`、`partial`、`failed`、`depleted` 等词在不同模块有不同语义，API、日志、埋点和前端状态不得只传裸字符串。至少使用对象名或字段名限定：
+
+| 命名空间 | 示例状态 | 含义 | 不得替代 |
+| --- | --- | --- | --- |
+| `account.status` | active/pending_deletion/deleted | 账户是否仍可访问 | 会话是否有效 |
+| `session.status` | active/revoked/expired | 某次会话能否继续使用 | 账户是否存在 |
+| `product.catalogState` | in_cabinet/archived/deleting/deleted | 产品是否处于日常柜内及清理阶段 | 计划或库存状态 |
+| `product.planState` | active/paused | 用户是否允许计划继续生成 occurrence | 库存是否充足 |
+| `product.stockState` | in_stock/low/depleted | 可自动分配库存和覆盖投影 | 用户是否暂停 |
+| `product.riskState` | unknown/safe/near_expiry/expired/unfinishable | 库存—计划—有效期风险 | 医学安全性 |
+| `recognitionSlot.status` | empty/queued/running/succeeded/partial/failed/stale 等 | 单个槽位当前版本的处理状态 | 整个建档草稿状态 |
+| `recognitionSet.status` | processing/awaiting_confirmation/confirmed/cancelled | 建档识别集的聚合进度 | 产品是否已建档完整 |
+| `occurrence.executionState` | pending/partial/completed/exceeded/missed | 计划时点与有效 intake 的关系 | 现实中是否服用 |
+| `intake.status` | active/revoked/superseded | 记录是否进入当前账本 | occurrence 是否完成 |
+| `batch.lifecycleState` | active/voided | 批次是否仍参与账本 | 余额或有效期风险 |
+| `aggregate.completenessStatus` | complete/partial/unknown | 已知与未知贡献是否齐全 | 任务运行成功与否 |
+| `projection.state` | fresh/refreshing/stale/failed/unavailable | 派生结果的新鲜度 | 来源事实本身是否失败 |
+| `reminderEvent.status` | scheduled/available/dismissed/resolved/expired/cancelled | 站内事件生命周期 | 业务事项是否真的完成 |
+| `aiRun.status` | preflighted/running/succeeded/refused/blocked_output/failed 等 | 一次模型运行结果 | 引用事实是否有效 |
+
+响应、埋点和错误详情使用完整字段路径，例如 `occurrence.executionState=partial`；不得只上报 `status=partial` 后让消费方猜测。
+
+### 15.3 单一事实、派生投影与展示层级
+
+系统数据分为四层：
+
+| 层级 | 示例 | 写入方式 | 一致性要求 |
+| --- | --- | --- | --- |
+| 核心事实 | Product、ScheduleVersion、PlanStateInterval、Intake、Allocation、InventoryEvent、NoteVersion | 用户命令或确认事务 | 强一致、幂等、可审计 |
+| 外部证据 | 私有图片、OCR 原文、候选、provider trace、ReferenceFact | 上传/任务/人工审核 | 版本化，不自动成为用户事实 |
+| 派生投影 | occurrence 状态、库存风险、成本汇总、成分日聚合、提醒事件 | 确定性计算或可重放消费者 | 可异步，但必须携带来源 revision 和新鲜度 |
+| 展示/辅助 | 页面缓存、排序标签、AI 解释、会话摘要 | 从前三层读取 | 永远不能反向改写事实 |
+
+缓存可以删除后重建；事实和证据不能因缓存刷新而改变。AI 回复、提醒文案、页面角标和“今天已完成”视觉状态都不是新的事实源。
+
+### 15.4 跨模块判定顺序
+
+对任一产品、日期和动作，服务端按以下顺序裁决：
+
+```text
+1. account/session/workspace 是否有效
+2. actor 是否拥有目标资源与操作权限
+3. catalogState 是否允许该动作
+4. 目标事实版本和 expectedVersion 是否仍匹配
+5. planState、ScheduleVersion 与日期是否允许生成 occurrence
+6. intake 动作与 occurrence 关系是否明确
+7. 批次余额、FEFO、有效期和账本状态是否允许完整分配
+8. 核心事务提交
+9. 使成本、成分、风险、提醒、导出等投影失效并重算
+10. 页面以事务结果为准，再等待派生投影收敛
+```
+
+前一步失败时不得跳到后一步“尽量完成”。例如库存不足不能先建 intake 再等待补库存，识别集未终态不能先建半个产品，账户处于 pending_deletion 时不能继续执行补货。
+
+### 15.5 产品、计划与库存状态传播
+
+产品柜内生命周期：
+
+```mermaid
+stateDiagram-v2
+  [*] --> InCabinet
+  InCabinet --> Archived: 用户归档
+  Archived --> InCabinet: 用户恢复
+  Archived --> Deleting: 永久删除受理
+  Deleting --> Deleting: 清理失败后重试
+  Deleting --> Deleted: 对象与业务数据清理完成
+  Deleted --> [*]
+```
+
+跨维度规则：
+
+- `catalogState=in_cabinet` 只表示产品在柜内；是否生成任务继续看 `planState` 与计划版本。
+- 归档是用户明确业务动作：写入 `catalogState=archived`，同时创建或延续 `reason=archived` 的暂停区间并取消未来提醒；ScheduleVersion 和历史 occurrence 不删除。
+- 恢复只把 `catalogState` 改回 in_cabinet，`planState` 默认仍为 paused；用户再次确认恢复计划后才关闭暂停区间。
+- 库存归零只派生 `stockState=depleted`，不改变 catalogState、planState 或 ScheduleVersion。
+- 补货只写批次与库存事实并重算 stock/risk；不能自动恢复 paused 或 archived 产品。
+- `catalogState=deleting` 后拒绝编辑、恢复、补货、新 intake、新 AI 会话和新提醒；只能读取不含业务正文的清理状态。
+- `riskState=safe` 只表示当前库存与计划下未命中已定义的有效期风险，不表示补剂对个人安全。
+
+模块 6 中“当前无库存时产品初始状态为 depleted”统一解释为 `stockState=depleted`；用户已确认的计划可以仍为 active，今日 occurrence 据此显示 `blocked_no_stock`。
+
+### 15.6 计划、Occurrence 与 Intake 状态机
+
+ScheduleVersion 不可变，PlanStateInterval 表达暂停/恢复；Occurrence 是两者与本地日期、doseSlot 的确定性实例。其身份至少由 productId、scheduleVersionId、localDate 和 doseSlotId 稳定确定，不能因页面刷新生成新 ID。
+
+```mermaid
+stateDiagram-v2
+  [*] --> Pending: occurrence 生成
+  Pending --> Partial: 有效记录量大于 0 且小于计划量
+  Pending --> Completed: 有效记录量等于计划量
+  Pending --> Exceeded: 有效记录量大于计划量
+  Partial --> Completed: 继续记录后等于计划量
+  Partial --> Exceeded: 继续记录后超过计划量
+  Completed --> Partial: 撤销或更正后低于计划量
+  Completed --> Missed: 过去日期撤销后有效量归零或不足
+  Exceeded --> Completed: 撤销或更正后等于计划量
+  Exceeded --> Partial: 撤销或更正后低于计划量
+  Exceeded --> Missed: 过去日期撤销或更正后仍未完成
+  Pending --> Missed: 本地日结束且仍为 0
+  Partial --> Missed: 本地日结束且仍未完成
+  Missed --> Partial: 历史补录后仍未完成
+  Missed --> Completed: 历史补录后完成
+  Missed --> Exceeded: 历史补录后超出
+```
+
+`missed` 是基于“当前时间 + 有效 intake”的派生展示，不是不可逆终态；历史补录后可重新变为 partial/completed/exceeded。`blocked_no_stock` 是 pending/partial 上的附加原因，不进入上述互斥状态机。
+
+Intake 自身只允许：
+
+```text
+active -> revoked
+active -> superseded -> replacement active
+```
+
+revoked/superseded 不恢复为 active。撤销或更正必须通过新命令和审计链完成；页面不能直接编辑原行。Occurrence 的执行状态始终由当前 active intake 合计重算，不保存一个可以和记录打架的手工完成开关。
+
+### 15.7 核心账本的传播链
+
+一次产品 intake 的权威传播链为：
+
+```mermaid
+flowchart LR
+  A[Intake 命令] --> B[IntakeRecord]
+  B --> C[IntakeAllocation]
+  C --> D[InventoryEvent 与批次余额]
+  C --> E[AllocationCostSnapshot]
+  C --> F[IngredientContribution]
+  B --> G[Occurrence 执行状态]
+  D --> H[库存与有效期风险投影]
+  F --> I[成分日聚合 revision]
+  G --> J[计划提醒收敛]
+  H --> J
+```
+
+必须同事务提交的是：IntakeRecord、Allocation、批次库存事件/余额、可在当次分配确定的成本快照、记录状态链和 outbox 事实。任一步失败则整笔不提交。
+
+允许事务后异步完成的是：跨日成分聚合、未来库存/有效期预测、提醒事件、月摘要、导出和分析投影。它们失败时保留核心 intake 与库存事实，页面显示上一完整 revision 或“正在更新/暂不可计算”，不能回滚用户已经成功记录的事实。
+
+手工成分记录走独立链：它只影响手工事件、IngredientContribution 和成分聚合，不创建 IntakeAllocation，不改变产品 occurrence、库存或成本。
+
+### 15.8 标准写命令流程
+
+所有写命令按同一骨架执行：
+
+```mermaid
+flowchart TD
+  A[收到命令] --> B[认证与工作区授权]
+  B --> C[校验 schema 与规范化 payload]
+  C --> D[读取 ClientActionId 与 requestHash]
+  D --> E{已有幂等结果?}
+  E -- 成功且同 payload --> F[返回原结果]
+  E -- 同 key 不同 payload --> G[409 idempotency_conflict]
+  E -- 无 --> H[锁定聚合并校验 expectedVersion]
+  H --> I[校验业务前置条件]
+  I --> J[事务写事实与 outbox]
+  J --> K[提交]
+  K --> L[返回事实版本与投影状态]
+  L --> M[消费者重算派生投影]
+```
+
+命令响应至少包含 requestId、ClientActionId、核心资源 ID、最新事实版本和必要的 `projectionState`。成功提示只在事务提交后出现；客户端本地动画、按钮禁用或轮询结束都不是成功证据。
+
+### 15.9 原子事务边界
+
+| 用户动作 | 必须同事务完成 | 事务后收敛 | 失败时结果 |
+| --- | --- | --- | --- |
+| 确认建档 | Product、IngredientProfileVersion、ScheduleVersion、可选 opening Batch/Event、证据关联、recognitionSet=confirmed、outbox | 柜页索引、风险、提醒 | 不出现半产品；草稿仍可恢复 |
+| 保存新计划 | 关闭当前区间、创建不可变新版本/取消旧待生效版本、outbox | 未来 occurrence、风险、提醒 | 旧版本继续有效，草稿保留 |
+| 暂停/恢复 | PlanStateInterval、产品事实版本、outbox | occurrence/风险/提醒 | 原 planState 不变 |
+| 创建 intake | Intake、Allocation、InventoryEvent、余额、成本快照、outbox | 成分、风险、提醒、统计 | 不留记录或部分扣减 |
+| 撤销/更正 intake | 状态链、原 allocation 精确补偿、新 allocation、库存/成本事件、outbox | 成分、风险、提醒、统计 | 原 intake 与库存保持原状 |
+| 补货/盘点/作废 | Batch、InventoryEvent、余额、成本层/状态、outbox | stock/risk、提醒、汇总 | 不留半个批次或无事件余额 |
+| 提交配方纠错 | pending correction/version、影响范围、重述任务、outbox | 新 contribution 与 aggregate revision | 上一完整版本继续展示 |
+| 保存手工成分 | ManualIngredientIntake、items/contributions、outbox | 日/月聚合、导出 revision | 整个事件不创建 |
+| 保存提醒偏好 | preference version、outbox | 未来 scheduled events 重建 | 旧偏好继续生效 |
+| 保存笔记 | NoteVersion、来源关系、outbox | 搜索索引 | 原笔记版本继续可读 |
+| 归档/恢复产品 | catalogState、必要的暂停区间、outbox | 未来 occurrence、风险入口、提醒 | 原状态不变 |
+| 请求永久删除产品 | catalogState=deleting、唯一 CleanupJob、非内容型操作审计 | 私有对象与业务数据清理、聚合重算 | 保持 deleting 并重试 |
+| 请求删除账户 | account=pending_deletion、撤销全部会话、唯一 CleanupJob | 对象优先清理与数据库级联 | 保持不可登录并重试 |
+
+成分“纠错”若会重述历史，采用两阶段激活：先保存 pending correction 和重述任务；全部 contribution 计算成功后，单事务切换 active IngredientAggregateRevision。失败时不把部分新旧结果混在同一页面。
+
+### 15.10 幂等、结果未知与安全重试
+
+所有会创建事实、账本事件、版本或外部计费运行的用户动作使用稳定 `ClientActionId`。规则：
+
+1. 唯一范围为 `workspaceId + ClientActionId`；同时保存规范化 requestHash、动作类型、状态和结果引用。
+2. 同 key、同 payload、已成功：返回第一次的资源和版本。
+3. 同 key、不同 payload：永远返回幂等冲突；用户明确修改内容后生成新 key。
+4. 事务提交前发生内部错误：同 key、同 payload 可安全重试。
+5. 客户端超时但服务端结果未知：进入 `result_unknown`，先按 ClientActionId 查询，不允许用户连续生成新 key 猜测结果。
+6. 库存不足等“未产生任何写入、且依赖事实可被用户修复”的拒绝不永久消费成功结果；补货后可以用同 key、同 payload 重新评估。服务端必须确认前次没有留下任何核心事实。
+7. 已产生外部费用但 provider 结果未知的 AI/识别尝试，按模块自身 retry policy 处理；不能把账本幂等等同于“供应商不会重复计费”。
+8. 删除、归档、撤销等命令还需领域唯一约束兜底，不能只依赖有限期缓存中的幂等键。
+
+幂等记录的运维保留期在模块 18 固定；无论记录是否到期，产品/识别来源唯一键、撤销补偿唯一键、活动清理任务唯一键等领域约束仍要阻止重复事实。
+
+### 15.11 版本、Revision 与纠错语义
+
+全产品区分四类“版本”：
+
+| 类型 | 示例 | 是否可改 | 用途 |
+| --- | --- | --- | --- |
+| 业务历史版本 | ScheduleVersion、IngredientProfileVersion、NoteVersion、ReferenceFactVersion | 不可原地改 | 解释某时点有效事实 |
+| 聚合乐观锁版本 | Product.version、Batch.version、Preference.version | 成功命令后递增 | 防多端静默覆盖 |
+| 投影 revision | IngredientAggregateRevision、RiskProjectionRevision、Reminder materialization cursor | 可重建、单调推进 | 标识派生结果来自哪些事实 |
+| 契约/策略版本 | API schema、CSV schema、AI policy、换算规则、时区库 | 受控发布 | 保证同一输入可解释 |
+
+规则：
+
+- 更新命令优先使用显式整数 version/ETag；`updatedAt` 只用于展示和兼容，不单独承担并发锁。
+- 历史版本用 `[effectiveFrom, effectiveTo)` 半开区间；一个对象同一时点最多一个 active 版本。
+- “新规则”只影响新事实或未来生效区间；“旧数据录错”才使用 correction 并保留 as-recorded 值、原因和影响范围。
+- 投影响应返回 `calculatedAt`、projectionRevision 和 source revision vector；不能只给一个没有来源的新总数。
+- 客户端草稿保存 baseVersion。发生冲突时展示本地值、远端值和字段差异，由用户重新提交新命令；不自动三方合并数量、计划、成分或授权字段。
+
+### 15.12 时间、日期与时区统一合同
+
+| 时间类型 | 存储与解释 |
+| --- | --- |
+| `createdAt/updatedAt/postedAt/confirmedAt` | UTC instant，API 使用带时区 ISO 8601 |
+| `occurredAt` | UTC instant + 发生时 `localDate`、`localTime`、IANA timezone/offset 快照 |
+| `effectiveFrom/effectiveTo` | 对应业务版本时区中的本地日期，前含后不含 |
+| 周规则与周期锚点 | ScheduleVersion 时区中的日历日期，不按 24 小时毫秒差计算 |
+| 批次有效期 | 原文 + day/month/year/unknown 精度；风险使用模块 10 的区间边界 |
+| 提醒 `availableAt` | 唯一 UTC instant，同时保留 occurrence/计划时区来源 |
+| 用户输入“今天” | 由工作区时区和服务端当前时间判定，不由浏览器单独决定 |
+
+跨模块规则：
+
+1. 服务端当前时间是“能否记录未来”“本地日是否结束”“Demo 是否过期”的权威；客户端时间只用于即时显示。
+2. 工作区时区变化只影响未来版本和新事实；历史 occurrence、intake、提醒、导出与成本记录保留原时区快照。
+3. 旅行或设备时区变化不自动改变工作区时区。
+4. 夏令时重复/不存在时间由版本化时区库产生唯一 occurrenceAt，并保留调整 reason code。
+5. 夜间时段标签跨 00:00，但 localDate 仍由各自 occurrence 决定；提醒分组不得改变事实日期。
+6. 历史补录的 `occurredAt` 与库存/成本的 `postedAt` 分开；补录不回放并重排后续库存历史。
+7. “最近 7 日/30 日/本月”等范围先在工作区时区生成本地日期闭区间，再转换为查询边界；不能用 UTC 日期直接替代。
+
+### 15.13 领域变更与 Outbox
+
+核心事务必须同时写入可重放 `DomainChange`/outbox，避免“事实成功但下游永远不知道”。最小字段：
+
+- eventId、workspaceId、aggregateType、aggregateId、aggregateVersion。
+- changeType、occurredAt、actorType、correlationId/ClientActionId。
+- 必要的影响范围 ID 和日期；不放图片、OCR 全文、笔记正文、健康字段或 AI prompt。
+
+消费者按 eventId 幂等，处理成功后推进自己的 cursor。至少覆盖：
+
+| 领域变更 | 必须失效/重算的下游 |
+| --- | --- |
+| ScheduleVersionCreated / PlanStateChanged | 未来 occurrence、计划视图、库存/有效期预测、站内提醒 |
+| WorkspaceTimezoneChanged | 未来计划版本、今日边界、未来提醒与风险；历史快照不改 |
+| IntakeCreated/Revoked/Superseded | occurrence 状态、库存/成本摘要、成分聚合、风险、提醒、统计 |
+| BatchCreated/Adjusted/Voided/MetadataCorrected | 库存/成本、FEFO、风险、提醒 |
+| IngredientProfileCorrected / MappingCorrected | contribution、日/月聚合、导出 revision；不改库存 |
+| ProductArchived/Restored | 未来 occurrence、可选列表、提醒；历史聚合保留 |
+| ProductDeletionRequested/Completed | 正常入口隐藏、清理、受影响聚合重算、引用失效 |
+| ReminderPreferenceChanged | 未来 scheduled event/target；不改计划和风险事实 |
+| HealthContextGrantRevoked | 新 AI run 可读上下文；不改历史业务事实 |
+
+发布器、消费者或 Worker 崩溃后都从持久状态恢复。禁止核心事务提交后仅靠进程内事件、浏览器刷新或定时全量扫描维持一致性；全量审计只能作为补偿，不是正常唯一机制。
+
+### 15.14 投影新鲜度与读一致性
+
+写成功后，用户立即读取到的核心资源必须包含已提交事实；重型投影允许短暂滞后，但必须显式：
+
+| `projectionState` | 页面行为 |
+| --- | --- |
+| `fresh` | 展示当前 projectionRevision |
+| `refreshing` | 展示上一完整 revision，并显示“正在更新” |
+| `stale` | 展示上一完整 revision、来源事实已更新的时间和重试/刷新入口 |
+| `failed` | 保留上一完整结果并显示“更新失败”；若从未成功则不展示结论 |
+| `unavailable` | 依赖能力未实现/关闭，不展示假数据或假入口 |
+
+以下结果要求事务内或同步 read-after-write：产品柜内状态、计划版本创建结果、intake/撤销/更正状态、批次余额、allocation 和成本快照。以下结果可以异步：未来风险、成分月聚合、提醒物化、搜索索引、导出和 AI。
+
+投影切换必须以完整 revision 为单位；不同来源 revision 的总数、来源列表和角标不能拼在同一响应。前端发现 sourceVersion 新于 projection source vector 时，必须显示 refreshing/stale，而不是继续标记 fresh。
+
+### 15.15 并发冲突裁决
+
+| 冲突类型 | 裁决方式 | 用户恢复 |
+| --- | --- | --- |
+| 两台设备修改同一产品/批次/偏好 | expectedVersion 乐观锁，只有一个成功 | 保留本地草稿并展示远端差异 |
+| 两笔 intake 抢最后库存 | 批次行锁 + 完整分配事务 | 失败方看到最新缺口并可补货 |
+| 同一 occurrence 两次一键记录 | ClientActionId + occurrence 当前状态重检 | 已成功则返回原结果；额外事实走明确新动作 |
+| 一个设备撤销、另一设备更正同一 intake | 锁定 intake 且只允许 active 转移一次 | 失败方刷新审计链，不补偿错误版本 |
+| 同时创建待生效 ScheduleVersion | 基准版本与唯一待生效约束 | 旧草稿不覆盖新版本，重新比较 |
+| 识别旧任务晚到 | slotVersion/current 指针校验 | 旧结果记 stale，不合并草稿 |
+| 重述与新 intake 同时发生 | 以 source revision vector 重新排队/增量补算 | 切换前必须覆盖提交期间新增来源 |
+| 归档与补货/intake 并发 | 锁定产品 catalog version，按先提交者决定 | 后提交者收到状态冲突，不跨状态写入 |
+| 永久删除与任何写入并发 | deleting 状态和唯一清理任务优先 | 后续写入拒绝；删除持续推进 |
+
+“最后写入者获胜”只允许用于无业务后果、可覆盖的本地 UI 偏好；数量、日期、计划、成分、授权、笔记正文和删除状态均不得静默覆盖。
+
+### 15.16 异步任务、租约与重试
+
+识别、成分重述、导出、提醒物化、AI、产品清理和账户清理共用运行信封，但保留各自业务状态：
+
+| 通用运行字段 | 要求 |
+| --- | --- |
+| status | queued/running/retry_wait/succeeded/failed/cancelled；领域可增加 partial/refused/expired 等结果状态 |
+| attempt/maxAttempts | 每次尝试可审计，达到上限进入可见失败态 |
+| runAfter/leaseUntil/heartbeatAt | 支持退避、租约回收和 Worker 崩溃恢复 |
+| sourceVersion | 结果只能应用到相同来源版本；否则记 stale |
+| provider/model/route | 外部调用时必填；Fake 明确标识 |
+| failureCode | 稳定、非敏感、可区分 retryable/final |
+| correlationId | 关联用户动作、outbox 和日志，不包含敏感正文 |
+
+两台 Worker 领取同一任务时，租约和条件更新保证只有一个结果成为活动结果。租约过期允许回收，不等于前一次 provider 必然未受理；涉及费用或不可重复外部副作用时使用模块专属策略，不能无条件自动重试。
+
+用户取消只阻止尚未提交的未来结果成为 active；已经提交的核心事实要通过正式撤销/纠错命令处理。账户/产品永久删除任务一旦受理不可由普通页面取消，失败后持续重试并告警。
+
+### 15.17 部分失败与补偿原则
+
+| 失败位置 | 产品语义 | 恢复方式 |
+| --- | --- | --- |
+| 核心事务提交前 | 视为未发生 | 保留草稿；同 action 安全重试 |
+| 核心事务提交成功、响应丢失 | 事实已发生 | 按 ClientActionId 查询并返回原结果 |
+| 核心事务成功、投影失败 | 核心事实有效，派生结果陈旧 | outbox 重放；展示 stale/failed |
+| 外部识别失败 | 图片和草稿仍在，候选不可用 | 单槽重试、换图或手填 |
+| AI/provider 失败 | 不产生正式解释或业务写入 | 保留问题，显式重试；核心功能可用 |
+| 文件清理失败 | 业务对象保持 deleting/pending_deletion | 持久任务重试，对象定位信息不先丢失 |
+| 导出中途失败 | 不产生可下载完成文件 | 重跑完整任务，删除部分文件 |
+| 聚合重述中途失败 | 上一完整 revision 继续活动 | 修复后全量/增量重算，再原子切换 |
+| 提醒消费者失败 | 计划、记录、风险事实不变 | 请求时补偿 + Worker 重放，不追发旧日洪水 |
+
+补偿一律追加显式事实或任务，不删除审计链后“假装没发生”。撤销 intake 使用原 allocation；库存盘点使用 adjustment；资料录错使用 correction；不得重新运行当前规则猜测过去的逆操作。
+
+### 15.18 归档、删除与历史影响矩阵
+
+| 状态/动作 | 新计划/新 intake | 历史纠错 | 历史查看/导出 | 投影与提醒 | 恢复 |
+| --- | --- | --- | --- | --- | --- |
+| 产品暂停 | 不生成暂停区间内 occurrence；允许明确 ad_hoc | 允许 | 保留 | 风险继续；计划提醒停止 | 可恢复计划 |
+| 产品归档 | 禁止 | 允许归档前 intake 撤销/更正 | 保留 | 未来提醒取消，历史聚合保留 | 可恢复到柜内，计划仍暂停 |
+| 产品 deleting | 禁止 | 禁止 | 普通入口隐藏，仅清理状态 | 清理完成后重算相关投影 | 不可恢复 |
+| 产品 deleted | 禁止 | 禁止 | 业务接口不可见 | 相关 contribution/引用移除或标记来源已删除 | 不可恢复 |
+| 账户 pending_deletion | 全部禁止，会话立即失效 | 禁止 | 普通账户入口不可访问 | 后台清理 | 不可取消 |
+| Demo expired/cleanup | 全部禁止 | 禁止 | 不迁移、不恢复 | 删除工作区全部派生数据 | 再访问创建新 Demo |
+
+普通归档用于停止日常使用但保留历史；永久删除明确移除相关历史。页面不得把二者都写成“删除”，也不能在清理失败时把 deleting 恢复为 archived。
+
+### 15.19 全局页面状态、离线与草稿
+
+所有核心页面至少区分：
+
+| 页面状态 | 要求 |
+| --- | --- |
+| initial_loading | 保留壳和骨架，不先显示空状态 |
+| ready | 显示服务端事实版本与正常操作 |
+| empty | 请求成功且确实无数据；提供符合场景的首动作 |
+| refreshing | 保留旧内容并显示更新，不清空页面 |
+| stale | 标明最后成功时间和受影响区块，不把旧结果写成当前 |
+| submitting | 冻结同 action 重复提交，允许离开前说明持久化状态 |
+| result_unknown | 按 ClientActionId 查询；不显示成功或失败猜测 |
+| conflict | 保留草稿、展示远端版本与恢复动作 |
+| partial_dependency | 核心事实可用、某个投影/provider 不可用 |
+| fatal_error | 页面壳、requestId、重试与安全返回路径 |
+
+R1 不实现离线自动写队列。离线时可以继续查看当前会话已加载的页面内容并显示最后同步时间，也可以继续填写本地草稿；不得为此新增未评审的持久私密缓存，也不能把记录、补货、计划修改、确认建档或删除显示为已成功。恢复网络后先刷新基准版本，再由用户确认提交；同一已发出但结果未知的动作继续复用原 ClientActionId。
+
+退出、会话失效、账户切换或 Demo 转真实账户时必须清除私有页面缓存和未加密敏感草稿。Demo 草稿不能带入注册工作区。
+
+### 15.20 错误分类与可恢复动作
+
+精确 HTTP/code 在模块 16 固定，本模块先冻结用户恢复语义：
+
+| 错误类别 | 是否自动重试 | 用户下一步 | 禁止表现 |
+| --- | --- | --- | --- |
+| validation | 否 | 定位字段并修改，生成新 action（未发出成功请求时可复用草稿） | 清空表单或静默改默认值 |
+| unauthorized/session_expired | 否 | 重新登录并使用安全 return path | 无限 401 重试 |
+| resource_not_found/tenant_hidden | 否 | 返回列表；不说明他人资源存在 | 泄露产品名或真实权限原因 |
+| version_conflict | 否 | 刷新、比较、重新提交 | 最后写入覆盖 |
+| idempotency_conflict | 否 | 检查原动作，内容变化后用新 key | 把第一次结果当本次结果 |
+| insufficient_inventory | 否 | 补货/盘点后用原意图安全重试 | 部分扣减或创建悬空 intake |
+| result_unknown | 查询，不盲重放 | 等待/按 action 查询 | 连续生成新 key |
+| dependency_unavailable | 有界、按模块策略 | 手工兜底或稍后重试 | 显示空数据或假成功 |
+| projection_stale/failed | 后台重放 | 查看核心事实、刷新投影 | 回滚成功命令或默认 safe |
+| rate_limited/quota | 按 Retry-After | 等待、减少范围或进入允许方案 | 伪装 provider 故障 |
+| resource_deleting/gone | 否 | 查看清理状态或返回 | 允许继续编辑或恢复 |
+
+错误页面和 toast 显示用户可理解文案与 requestId；内部日志记录非敏感原因链。不得把 OCR、笔记、健康上下文、完整产品资料或邮箱验证码放入错误详情。
+
+### 15.21 当前实现与目标差距
+
+| 能力 | 当前 Uni（代码核对） | 目标处理 |
+| --- | --- | --- |
+| 产品状态 | 单一 active/paused/depleted 仍耦合计划与库存 | 拆分 catalog/plan/stock/risk 四维并按本模块传播 |
+| 日期 | 多处主要按 UTC date 与浏览器日期处理 | 工作区 IANA 时区、历史快照和本地日历合同 |
+| 计划版本 | 只部分保护 day-cycle 历史 | 完整不可变 ScheduleVersion + PlanStateInterval |
+| 幂等 | intake/确认已有基础，其他写动作覆盖不完整 | 全部事实写命令统一 ClientActionId/requestHash |
+| 事务 | FEFO、撤销、产品创建已有较强事务基础 | 明确加入 cost snapshot、outbox 与跨模块失效 |
+| 异步任务 | 识别任务已有租约、重试和持久状态 | 重述、导出、提醒、AI、清理复用运行信封 |
+| 投影 | 风险和摘要多为请求时计算，缺统一 revision/stale 语义 | source revision vector + 原子切换 + 新鲜度 |
+| 并发 | 批次锁和部分唯一约束已存在 | 产品/计划/偏好/笔记/纠错统一 expectedVersion |
+| 错误 | 已有稳定基础 error registry | 补 version/idempotency/projection/deleting 等恢复语义 |
+| 页面恢复 | 识别可持久轮询，其他页面较依赖当次请求 | 全局 result_unknown/conflict/stale/partial_dependency 状态 |
+| 领域变更 | 尚无覆盖全部新模块的统一 outbox | 核心事务内 outbox、消费者 cursor 与补偿审计 |
+
+现有识别任务租约、FEFO 事务、固定精度、精确撤销、租户过滤和对象优先清理是应保留的底座；本模块要求补齐跨域一致性，不要求为了统一命名重写已经正确的核心算法。
+
+### 15.22 系统不变量
+
+- 任一私有读写先绑定有效 account/session/workspace/actor；跨租户对象与不存在不可区分。
+- 同一用户动作至多产生一组核心事实；同 key 不同 payload 永不复用结果。
+- ScheduleVersion、IngredientProfileVersion 和历史 NoteVersion 不原地覆盖。
+- 同一产品/日期/doseSlot 的 occurrence 身份稳定；执行状态只由 active intake 派生。
+- 每个 active intake 的 allocation 总和等于 intake quantity；每个 allocation 对应同批次库存事件和成本状态。
+- 批次余额等于有效库存事件回放，任何投影不得产生负库存或无事件余额。
+- 撤销和更正只沿原事实链补偿，不用当前 FEFO、当前配方或当前计划猜测历史。
+- 核心事务和 outbox 同时提交；投影消费者可以重复执行但结果必须幂等。
+- 投影失败、未知、过期或超出范围不降级为 empty、complete 或 safe。
+- 当前页面的总数、来源明细、角标和导出必须来自同一 projection revision。
+- 归档保留历史，永久删除移除历史；deleting/pending_deletion 不允许恢复写入。
+- 工作区时区变更不漂移历史；服务器和浏览器默认时区不能偷偷参与业务计算。
+- AI、提醒、缓存和搜索索引不能改变产品、计划、记录、库存、成本或成分事实。
+- Fake、Mock、预制回复和健康检查不得计为真实 provider、生产投影或端到端验收证据。
+
+### 15.23 验收标准
+
+- Given 产品 active 且库存归零，When 打开今日与补剂柜，Then planState 仍 active、occurrence 仍存在、stockState=depleted，并显示 blocked_no_stock。
+- Given paused 产品补货，When 批次事务成功，Then 库存和风险开始重算，planState 仍 paused，不生成计划提醒。
+- Given 用户归档 active 产品，When 事务提交，Then catalogState=archived、暂停区间生效、未来提醒取消，历史 intake 与成分聚合保持。
+- Given 用户恢复归档产品，When 返回补剂柜，Then catalogState=in_cabinet 但计划仍 paused，需再次确认才恢复。
+- Given 同一 occurrence 先记录一部分，跨日后显示 missed，When 后续补录完成，Then 状态可从 missed 变 completed，历史计划不被修改。
+- Given intake 创建事务在第二个批次扣减前失败，When 查询记录与库存，Then 没有 intake、allocation 或任一批次部分事件。
+- Given intake 已提交但响应丢失，When 客户端按同 ClientActionId 查询/重试，Then 返回同一记录，不再次扣库存。
+- Given intake 因库存不足被完整拒绝，When 用户补货后以同 key、同 payload 重试，Then 可重新评估并只创建一条记录。
+- Given 同 key 修改了数量后重试，When 服务端比较 requestHash，Then 返回 idempotency_conflict，不复用旧结果。
+- Given 两台设备同时消耗最后库存，When 并发提交，Then 只有完整可分配的一笔成功，另一笔无任何部分写入。
+- Given 另一设备先保存产品资料，When 本地旧草稿提交，Then 返回 version_conflict、保留草稿并展示字段差异。
+- Given 旧识别任务在图片替换后返回，When Worker 提交结果，Then 结果只关联旧 slotVersion 并标为 stale，不改变当前草稿。
+- Given 核心 intake 成功而成分聚合失败，When 用户查看记录和成分页，Then 记录/库存显示成功，成分页保留上一 revision 并显示更新失败。
+- Given 重述期间又创建一条相关 intake，When 新 revision 准备切换，Then source vector 必须覆盖新记录，否则重新补算而不能切换不完整 revision。
+- Given 计划保存后提醒 Worker 离线，When 用户打开今日，Then 新计划事实可见；提醒显示更新中并在 Worker/请求补偿恢复后收敛。
+- Given 工作区从一个时区显式切换到另一个时区，When 查看过去记录与未来任务，Then 历史 localDate/offset 不变，只有未来版本按新时区生成。
+- Given 浏览器时钟被调到未来，When 尝试记录未来 intake，Then 服务端仍按自身时间与工作区时区拒绝。
+- Given 断网时用户点击记录，When 请求未送达，Then 页面不显示已完成；恢复网络后刷新版本再让用户提交。
+- Given 请求已送达但客户端断网，When 恢复连接，Then 页面进入 result_unknown 并按 action 查询，不自动生成第二个 key。
+- Given 产品永久删除清理到一半失败，When 用户重新进入，Then 普通业务入口不恢复产品，只显示删除处理中且后台继续重试。
+- Given 用户 B 构造用户 A 的任意 product/intake/job/projection ID，When 服务端处理，Then 在授权阶段返回不可枚举结果，不进入领域计算。
+- Given 投影返回旧总数而来源 revision 已推进，When 页面渲染，Then 标为 stale/refreshing，不展示为当前 fresh 结果。
+- Given Demo、Fake 识别或模拟 AI 全部通过，When 查看生产验收，Then 仍标记模拟证据，不关闭真实 provider 门禁。
+
+### 15.24 本模块确认点
+
+本模块建议冻结以下跨模块判断：
+
+1. 所有状态都带领域命名空间；产品柜内、计划、库存和风险四维独立，不能再用一个 status 相互改写。
+2. 核心事实、证据、派生投影和展示辅助分层；AI、提醒、缓存和页面状态永远不能成为业务事实源。
+3. 建档确认、intake/撤销/更正、库存与成本账本等核心写入使用原子事务；重型聚合和提醒在事务后通过 outbox 幂等收敛。
+4. 全部事实写命令统一 ClientActionId、requestHash 和 expectedVersion；结果未知先查询，同 key 不同内容冲突。
+5. ScheduleVersion 等历史版本不可变；纠错保留 as-recorded 值，投影以完整 revision 原子切换，不混合新旧结果。
+6. 时间统一为 UTC instant + 业务本地日期/IANA 时区快照；时区变化只影响未来，历史补录不重排库存历史。
+7. R1 不做离线自动写队列；离线草稿不是成功事实，恢复后先刷新版本再提交。
+8. 归档保留历史且可恢复；永久删除受理后不可恢复，清理失败保持 deleting/pending_deletion 并重试。
+
+请确认模块 15。确认后，模块 16 将把上述事实、版本、状态与授权合同映射为统一数据模型、数据流、接口、权限矩阵和隐私生命周期。

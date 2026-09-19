@@ -2894,3 +2894,389 @@ MVP/Web 的 localStorage 单瓶对象只作为参考，不直接导入生产 Uni
 7. 有效期风险按批次模拟；day/month/year/unknown 保留原精度，unknown 不等于 safe，风险计算失败也不默认安全。
 
 请确认模块 10。确认后，模块 11 将定义批次价格、单位成本、实际消耗成本、退款/调整、累计花费和库存价值口径。
+
+## 11. 成本账本
+
+### 11.1 模块目标与产品定位
+
+成本账本帮助用户理解“买入多少、实际摄入消耗了多少成本、因丢失/过期损耗了多少、现在库存里还沉淀多少成本”。它是补剂管理的辅助理解层，不是财务会计软件，也不能反过来阻断建档、记录、补货、撤销和提醒主闭环。
+
+本模块必须解决旧 MVP 和当前 Uni 的三个误导：
+
+1. 未填价格不能显示为 ¥0；unknown 和用户明确确认的零成本是两个不同事实。
+2. 旧记录不能用产品当前价格反推历史成本；历史成本必须来自当时 allocation 的批次成本或明确的后续成本重述。
+3. “本月花了多少钱”不能同时指购买现金支出和摄入消耗成本；两者发生时间与用途不同，必须分开。
+
+成本功能全程选填。用户可以不给任何批次录入价格，也能完成产品、计划、摄入、库存、风险和成分闭环；成本页面只显示完整度，不用假金额填空。
+
+### 11.2 五类金额必须分开
+
+| 口径 | 含义 | 时间归属 | 典型问题 |
+| --- | --- | --- | --- |
+| 购买支出 `purchaseSpend` | 购买批次实际支付的现金流出 | `paidAt` | 这个月实际买补剂花了多少 |
+| 退款收入 `refundReceived` | 商家退回的现金 | `refundedAt` | 这个月收到多少退款 |
+| 摄入成本 `consumptionCost` | active intake 实际 allocation 对应的取得成本 | intake `occurredAt` | 今天/本月实际摄入的补剂成本是多少 |
+| 非摄入损耗 `inventoryLossCost` | 丢失、损坏、过期丢弃等数量减少对应的成本 | adjustment `postedAt` | 有多少已支付成本没有形成摄入 |
+| 库存价值 `inventoryCarryingValue` | 当前仍在手数量承载的取得成本 | 查询时点 | 现在剩余库存的历史取得成本是多少 |
+
+购买支出是现金流视图，摄入/损耗/库存价值是同一批取得成本的分配视图。它们不能相加得出“总成本”，也不能在一张卡片上都写成“花费”。
+
+未来计划成本只是按当前批次和计划模拟的 `plannedCostEstimate`，必须标记“估算”；它既不是已经支付的新增现金，也不是已经发生的摄入成本。
+
+### 11.3 币种范围
+
+#### 11.3.1 工作区基准币种
+
+每个工作区有一个 `baseCurrency`，使用 ISO 4217 代码。R1 的中国区界面固定为 `CNY`，展示符号为 `¥`；数据模型不再把币种写死在字段名中。
+
+工作区存在任何成本事实后，不能直接切换 baseCurrency 并用当前汇率重写历史。未来若开放切换，必须由独立迁移生成新换算版本和审计记录，不属于本模块 R1/R2 主路径。
+
+#### 11.3.2 外币购入
+
+R1 不接入自动汇率服务。用户购买海外补剂时，默认填写银行卡、支付平台或账单最终结算的人民币金额。
+
+R2 可以选填：
+
+- `originalAmount`、`originalCurrency`。
+- 用户确认的 `exchangeRateToBase`。
+- 汇率日期和来源 `user_entered / statement`。
+- 换算后的 `baseAmount`。
+
+只有存在用户确认的 baseAmount 才进入跨批次汇总。只有外币金额但没有确认汇率时，页面按原币种单列并把基准币种成本标为 incomplete；系统不使用实时汇率猜测，也不因汇率波动重写历史。
+
+### 11.4 批次成本事实
+
+#### 11.4.1 BatchCostVersion
+
+每个批次可以有零个或多个不可变 `BatchCostVersion`。批次未填价格时不存在有效成本版本，批次/成本层的 costStatus=unknown；不是创建金额为 0 的版本。BatchCostVersion 本身只承载 known 或 known_zero 金额事实。
+
+成本版本至少包含：
+
+- `id`、`workspaceId`、`productId`、`batchId`、`version`。
+- `costStatus`：`known / known_zero`；unknown 由“没有对应有效成本版本”表达。
+- `baseCurrency`。
+- `itemAmount`：该批商品本身金额。
+- `shippingAllocated`、`taxAndDutyAllocated`、`otherFeeAllocated`。
+- `discountAllocated`。
+- 截至该版本已确认的 `refundAmount`。
+- `netAcquisitionCost`。
+- `costBasisQuantity`：本批取得成本对应的数量分母。
+- 可空 original amount/currency/exchange rate。
+- `source`：`manual / statement / imported`；本期没有 OCR 自动入账。
+- `reason`：首次录入、补录价格、更正数量、价格修正、退款等。
+- `createdAt`、`createdBy`、基准版本 ID。
+
+计算公式：
+
+```text
+gross_acquisition_cost =
+  item_amount
+  + shipping_allocated
+  + tax_and_duty_allocated
+  + other_fee_allocated
+  - discount_allocated
+
+net_acquisition_cost = gross_acquisition_cost - confirmed_refund_amount
+
+unit_acquisition_cost = net_acquisition_cost / cost_basis_quantity
+```
+
+所有输入项必须大于等于 0；折扣和退款不得使 netAcquisitionCost 小于 0。用户只想简单记录时，界面只提供“本批实际支付”一个字段，并把它直接保存为 itemAmount、其他拆分为 0。高级拆分折叠展示。
+
+共享运费或订单级优惠不自动按商品比例分摊。用户可以手工填写分配到该批次的金额；没有明确分配时留空/0 并显示口径，不构建超出当前产品范围的购物订单系统。
+
+#### 11.4.2 unknown、known_zero 与 known
+
+| 状态 | 用户语义 | 聚合处理 |
+| --- | --- | --- |
+| unknown | 没填、找不到收据或历史缺失 | 不计入金额；数量和记录进入“未计价” |
+| known_zero | 用户明确确认赠品、试用装或全额退款后净成本为 0 | 计入覆盖率，成本为 0 |
+| known | 已确认净取得成本大于 0 | 正常计算 |
+
+界面不能把空输入默认保存为 0。用户输入 0 时必须选择“赠品/试用装”或确认“本批净成本确为 0”，防止误触把 unknown 变成 known_zero。
+
+### 11.5 成本数量分母与库存调整
+
+`costBasisQuantity` 初始等于批次建批时的 `receivedQuantity`。模块 10 的数量调整不一定改变成本分母：
+
+| 库存变化原因 | 数量账本 | 成本分母 | 成本结果 |
+| --- | --- | --- | --- |
+| 初始数量录错，明确选择“修正购入数量” | 写 adjustment | 同 delta 修正 costBasisQuantity，创建新成本版本 | 总取得成本不变，单位成本和历史分配重述 |
+| 盘点发现丢失/损坏/过期丢弃 | 写负 adjustment | 不变 | 对减少数量确认 inventoryLossCost |
+| 退货给商家 | 写负 adjustment | 由退款/退货成本版本处理 | 库存减少，退款单独按日期记录，剩余批次成本重述 |
+| 找回原批次库存或一般正向盘点 | 写正 adjustment | 默认不自动改变 | 成本覆盖可能变为部分未知，要求用户选择成本处理 |
+| 新买一瓶 | 新建 batch | 新批次独立分母 | 不允许用正向 adjustment 伪装补货 |
+
+正向 adjustment 使当前数量超过已知 costBasisQuantity 时，系统必须要求用户选择：
+
+1. “修正原购入数量”：总取得成本不变、扩大分母并重述单位成本。
+2. “同批新增且有成本”：补录增量金额并创建新成本版本。
+3. “成本未知”：新增数量进入 unpricedQuantity，不把旧单位成本静默套用到它。
+
+这一步不能用默认值自动裁决，因为三种情况会产生不同的单位成本和库存价值。
+
+#### 11.5.1 批次内成本层
+
+一个库存批次可以因为正向 adjustment 同时包含已计价和未计价数量，因此批次平均单价不足以作为完整成本模型。目标模型在 batch 内维护 `CostBasisLayer`：
+
+- opening/restock 数量创建第一层。
+- 明确“修正原购入数量”时，版本化修正原层的 costBasisQuantity，不新建层。
+- 另有增量金额的正向 adjustment 创建新的 known/known_zero 层。
+- 成本未知的正向 adjustment 创建 unknown 层。
+- 每层保存来源库存事件、取得数量、当前剩余数量、成本状态、金额/币种和成本版本。
+
+同一 batch 的数量仍按模块 10 作为一个 FEFO 单元；进入该 batch 后，成本层按取得/事件时间升序、最后按 layer ID 稳定释放。IntakeAllocation 增加 `costLayerAllocations[]`，各层数量之和等于该 batch allocation 数量。这样已计价的旧数量耗尽后，后续摄入会正确变为部分或全部 unknown，而不是把旧单价无限套用。
+
+### 11.6 IntakeAllocation 成本快照
+
+每个 intake allocation 除批次与数量外，必须保存：
+
+- `costStatusSnapshot`。
+- 可空 `batchCostVersionId`。
+- `costLayerAllocations[]`：批次内各成本层的数量、状态和版本。
+- 可空 `unitCostExact`。
+- 可空 `allocationCostExact`。
+- `currency`。
+- `costCalculatedAt`。
+
+若批次 costStatus=known/known_zero：
+
+```text
+allocation_cost_exact = allocation_quantity * unit_acquisition_cost
+```
+
+若批次成本 unknown，allocation 成本保持 unknown，不能保存 0。一次 intake 跨多个批次时，结果同时返回已知金额和未知数量；只有所有 allocation 均有已知成本时，才可以显示一个不带限定词的 intake 总成本。
+
+allocation 上的版本快照用于证明“写入当时使用了什么成本”。报表默认使用最新确认成本版本重述后的金额；详情页可展开查看 as-recorded 与 current-restated 两种值。系统不得覆盖原快照。
+
+### 11.7 后补价格、价格修正与历史重述
+
+同一批次的取得成本适用于该批次全部取得数量，不应因用户晚几天补填价格而只影响未来 intake。因此：
+
+1. 后补价格、修正实际支付金额、修正 costBasisQuantity 或确认退款时创建新的 BatchCostVersion。
+2. 服务端计算该批次所有 active intake allocation、非摄入库存减少和当前余额在旧/新版本下的差额。
+3. 追加 CostRestatement 记录，不修改原 allocation 成本快照。
+4. 默认成本报表立即使用重述值；审计页保留旧版本、差额、原因、操作者和提交时间。
+5. 重述任务与成本版本提交必须具有持久状态；不能出现版本已更新但历史报表只改了一半。
+
+价格修正不改变 intake 数量、库存事件、FEFO 结果、计划状态或成分摄入。重述失败时继续使用上一完整成本版本并明确显示“成本更新处理中/失败”，不得混合两版结果。
+
+### 11.8 退款与退货
+
+退款是货币事实，不等于库存自动增加或减少：
+
+- 仅价格补偿、无需退货：记录 refundReceived，降低 netAcquisitionCost，数量不变并重述单位成本。
+- 部分/全部退货：在同一用户流程中明确选择退回的批次数量，数量账本写退货 adjustment，成本账本写退款；两者应在同一服务端事务或持久工作流中完成。
+- 全额退款但商品仍归用户：允许 known_zero；数量保留，成本重述为 0。
+- 退款不得超过该批次已确认 grossAcquisitionCost；超额赔偿、优惠券价值和积分不进入本期成本账本。
+- 撤销退款使用反向货币事件和新成本版本，不物理删除原退款。
+
+退款现金归属 `refundedAt`；它对批次单位成本的影响适用于当前重述视图。现金流报表不会把退款挪回原购买日，避免掩盖实际收款时间。
+
+### 11.9 摄入撤销、更正与成本
+
+- 创建 intake 时，数量 allocation 与成本快照在同一事务提交。
+- 撤销 intake 时，除精确恢复原批次数量外，写入原 consumption cost 的精确反向成本事件；重复撤销不得再次冲回成本。
+- 成本报表按 active intake 统计，因此撤销后原 occurredAt 日期的摄入成本从默认报表移除；审计时间线仍显示记录时间和撤销提交时间。
+- intake 更正使用模块 9 的原子替换：旧数量/成本一起冲回，新数量/批次/成本一起写入。
+- 若更正跨到另一个批次或成本版本，使用新 allocation 的真实来源，不能沿用旧平均单价。
+- 撤销发生后再修正批次价格时，已撤销 intake 不进入 active consumptionCost；其原始和反向事件仍在审计链中保持净额为 0。
+
+### 11.10 非摄入损耗成本
+
+模块 10 中 `damaged_or_lost`、`discarded_expired` 等负向 adjustment 不产生 intake，却会减少已支付库存。因此系统按该批次当时有效成本版本生成 inventoryLossCost。
+
+损耗必须按原因分组展示：过期丢弃、损坏/丢失、退货和其他不能混为“已吃成本”。退货数量对应的成本释放与退款配对，不计入损耗；单纯盘点数量修正若无法确认原因，显示 `unclassifiedInventoryVariance`，不擅自归为损耗。
+
+损耗 adjustment 被反向更正时，原损耗成本同样精确冲回。批次成本后来重述时，active 损耗金额与剩余库存价值一起重述。
+
+### 11.11 库存价值
+
+库存价值表示历史取得成本在当前剩余数量上的承载值，不是市场价、转售价或未来补货价。
+
+对成本完整的批次：
+
+```text
+batch_inventory_value = current_priced_quantity * current_restated_unit_cost
+```
+
+产品与工作区汇总同时返回：
+
+- `knownInventoryValue`。
+- `pricedQuantity`：所有剩余 known/known_zero 成本层数量。
+- `unpricedQuantity`：所有剩余 unknown 成本层数量。
+- `costCoverageRate = pricedQuantity / onHandQuantity`。
+- `expiredInventoryValue` 与 `autoAllocatableInventoryValue` 分列。
+
+只要 unpricedQuantity > 0，页面不得把 knownInventoryValue 标为“库存总价值”；应显示“已知库存价值 ¥X，另有 Y 单位未计价”。过期库存仍有历史取得成本，进入 expiredInventoryValue，但不进入自动可分配价值。
+
+### 11.12 计划成本估算
+
+计划成本使用模块 10 的未来 occurrence + FEFO 模拟，并应用当前确认的 BatchCostVersion：
+
+- 已完成 occurrence 使用 active intake 的重述实际成本。
+- 尚未完成 occurrence 使用预计分配批次的当前单位成本。
+- 未来 ad_hoc 不预测。
+- 任一预计 allocation 成本 unknown 时，返回已知金额、未知数量和覆盖率，不补 0。
+- 计划或库存变化后立即失效重算。
+
+页面可以展示“今日剩余计划预计成本”或自定义区间估算，但默认成本首页不把计划估算与实际摄入成本合并。估算只能辅助理解现有库存消耗，不用于指导用户改变剂量或计划。
+
+### 11.13 金额精度与舍入
+
+货币总额不能经过 JavaScript 二进制浮点成为账本事实：
+
+- 用户输入的总额按币种最小单位保存；CNY 使用整数分。
+- 汇率、单位成本和 allocation 精确成本使用数据库 decimal/numeric，禁止 float 作为服务端计算权威。
+- 数量继续使用模块 10 的固定精度。
+- 报表先汇总精确金额，再按币种最小单位四舍五入展示；CNY 保留两位小数。
+- 批次完全分配或退出库存时，最后一笔成本承担前序显示舍入产生的剩余差额，保证已知净取得成本守恒。
+- API 返回金额对象 `{amountMinor, currency}`；需要展示单位成本时另返回 decimal string，不能只返回不带币种的 number。
+
+模块 11 不使用“约等于”掩盖账本误差。显示舍入可以存在，但精确总额、已释放成本和库存价值之间必须可对账。
+
+### 11.14 成本账本页面
+
+成本功能保持低存在感，不加入五个全局一级入口：
+
+- 产品详情的“库存与风险”区域提供“成本”次级入口。
+- 设置/数据区域提供“成本账本”文字入口。
+- 新建批次和补货表单提供选填“本批实际支付”，高级拆分默认折叠。
+- 今日卡片不默认展示价格，避免干扰执行。
+
+成本账本首页默认展示本月，并把不同口径分区：
+
+| 区域 | 默认内容 |
+| --- | --- |
+| 现金 | 本月购买支出、退款、净现金支出 |
+| 使用 | 今日/本月实际摄入成本、计划估算另标 |
+| 损耗 | 本月过期丢弃、损坏/丢失和未分类差异 |
+| 库存 | 当前已知库存价值、过期库存价值、未计价数量、成本覆盖率 |
+
+支持最近 7 日、30 日、本月、自定义区间，按产品、批次、事件类型和成本完整度筛选。明细时间线同时展示业务发生时间与账本提交时间；历史补录会改变过去摄入成本视图，但审计页能看到何时补录。
+
+产品成本详情显示批次成本版本、当前单位成本、累计摄入成本、累计损耗、剩余价值及对账关系。成本导出复用模块 16 的统一用户数据导出，不另建不可追溯的客户端 CSV 口径。
+
+### 11.15 失败、并发与权限
+
+| 场景 | 处理 |
+| --- | --- |
+| 空价格输入 | 保存为 unknown，不生成零金额版本 |
+| 0 金额输入 | 要求确认赠品/全额退款语义后保存 known_zero |
+| 价格修正时批次版本已变化 | 返回冲突和最新成本版本，保留草稿 |
+| 成本重述运行中 | 继续显示上一完整版本并标记处理中 |
+| 成本重述失败 | 不混合部分新旧结果；允许重试并告警 |
+| intake 成功但成本事件失败 | 整个 intake 事务回滚；unknown 成本不是失败，写明确 unknown 快照 |
+| 退款与退货部分失败 | 使用同一持久工作流恢复或回滚，不出现钱已退但库存未减的无解释状态 |
+| 汇率缺失 | 原币金额单列，基准币种汇总 incomplete |
+| 成本聚合超时 | 保留筛选条件，显示错误和重试，不显示 ¥0 |
+
+成本数据与产品、批次、intake 一样按 workspace 隔离。普通用户只能读取和修改自己的成本事实；后台日志、指标和错误信息不得记录原始金额、收据内容或支付备注。成本事实不发送给 AI，除非模块 14 未来定义独立、逐次授权的机械汇总场景。
+
+### 11.16 当前实现与目标合同的差距
+
+| 能力 | 当前 Uni / MVP（代码核对） | 目标处理 |
+| --- | --- | --- |
+| 批次价格 | Uni 只有非空 `price_cny`，缺失默认 0 | unknown/known_zero/known 分离，金额对象带币种 |
+| 币种 | 字段和界面写死 CNY | 工作区基准币种；R1 CNY，R2 可保留外币原值和人工确认换算 |
+| 单位成本 | Uni 用 price cents ÷ initial quantity，并经 float 计算 | decimal + costBasisQuantity + 不可变 BatchCostVersion |
+| allocation 快照 | Uni 已保存 `unit_cost_cny` | 保留并增加成本状态、版本、精确 allocation cost 和币种 |
+| 历史价格 | MVP 对无 allocation 旧记录使用当前批次价估算 | 禁止反推；unknown 明示，后补价格走带审计重述 |
+| 缺价格展示 | MVP/Uni 把未填价格当 ¥0 | 未计价数量与覆盖率，不制造零成本 |
+| 费用范围 | MVP 只有购入价 | 简单总支付 + 可选运费/税费/优惠拆分 |
+| 退款/退货 | 无合同 | 货币与数量事实分离但关联，支持部分/全额退款和反向事件 |
+| 库存调整成本 | 无 | 区分购入数量修正、损耗、退货和未知正向调整 |
+| 混合成本数量 | 同一批次只有一个平均单价 | 批次内 CostBasisLayer，允许已计价/未计价数量共存并稳定释放 |
+| 成本页面 | MVP 有今日实际/今日计划/周/月简单卡片；Uni 无聚合页面 | 分开现金、摄入、损耗、库存价值与计划估算 |
+| 库存价值 | 无 | 已知价值 + 未计价数量 + 覆盖率；过期/可用分列 |
+| 价格修正 | 无版本/重述 | 新成本版本 + 持久重述 + as-recorded 审计 |
+| 精度 | 数据库金额部分为 numeric，但服务层转 float | 整数最小币种单位 + decimal 计算，汇总后舍入 |
+
+Uni 已有按 FEFO allocation 保存单位成本快照的正确起点，但当前只能证明“当时按一个 CNY 数字算过”，不能表达价格缺失、币种、修正、退款、损耗或聚合完整度。目标在保留 allocation 关联的基础上补齐成本事实，而不是再建一套脱离库存的价格表。
+
+### 11.17 迁移规则
+
+- 现有 batch `price_cny > 0`：创建 legacy CNY BatchCostVersion，itemAmount=price_cny，costBasisQuantity=initial_quantity，source=imported。
+- 现有 batch `price_cny = 0`：默认迁为 unknown，因为旧数据无法证明用户明确输入了赠品；不能批量迁为 known_zero。
+- 现有 allocation `unit_cost_cny > 0`：保留原快照，并关联可证明的 legacy 成本版本。
+- 现有 allocation `unit_cost_cny = 0` 且批次旧价格为 0：迁为 unknown，不解释为免费。
+- 对 migrated batch 运行成本守恒审计；不能从当前产品或其他批次价格估算缺失历史。
+- MVP/Web localStorage 成本只作为用户导入候选；导入前展示批次、价格和币种，用户确认后才进入 Uni。旧记录没有 allocation 时保持 unknown。
+
+迁移后成本页面先显示覆盖率。历史数据不完整是事实，正确展示“未计价”优于生成看似完整但来源错误的金额。
+
+### 11.18 交付顺序
+
+| 阶段 | 必须交付 |
+| --- | --- |
+| R1 可信闭环 | CNY unknown/zero/known、批次净支付、decimal 单位成本、allocation 成本快照、摄入/撤销成本、损耗成本、库存价值、完整度和基础成本页 |
+| R2 完整管理 | 成本版本与历史重述、退款/退货、费用拆分、正向调整成本裁决、计划估算、筛选与详细对账 |
+| R3/R4 | 可选原币/人工汇率元数据与统一导出；不接入会自动改写历史的实时汇率，AI 不拥有成本计算 |
+
+R1 必须先把 unknown 从 0 中拆出来，否则后续任何成本报表都会建立在错误基线上。R2 的重述可以异步实现，但必须在允许用户修改批次价格之前交付。
+
+### 11.19 指标与系统不变量
+
+#### 产品指标
+
+| 指标 | 口径 |
+| --- | --- |
+| 批次计价覆盖率 | 有 known/known_zero 成本的在手数量 ÷ 全部在手数量 |
+| intake 成本覆盖率 | 成本完整的 active intake 数 ÷ 全部 active intake 数；另报告按数量覆盖率 |
+| 成本录入率 | 新增批次时保存 known/known_zero 成本的批次数 ÷ 新增批次数 |
+| 价格后补率 | 首次 unknown 后创建有效成本版本的批次数 ÷ unknown 批次数 |
+| 成本修正率 | 创建第二版及以上成本版本的批次数 ÷ 已计价批次数 |
+| 对账不一致率 | 成本守恒审计失败批次数 ÷ 已审计计价批次数；目标 0 |
+| 成本页使用率 | 打开成本账本的月活用户 ÷ 有计价批次的月活用户；只测基线，不作为主留存指标 |
+
+#### 必须满足的不变量
+
+- unknown 成本不能以 0 进入金额合计；known_zero 必须有用户明确确认来源。
+- 同一 BatchCostVersion 的 netAcquisitionCost、costBasisQuantity 和币种不可原地修改。
+- active intake 的 consumptionCost 只来自其 allocation 批次及当前完整重述，不使用产品当前价估算。
+- 同一 batch 内 costLayerAllocation 数量之和等于 batch allocation 数量；unknown 层不能借用其他层单价。
+- intake 撤销/更正的成本反向金额与原成本事件精确对应，最多执行一次。
+- 退款、损耗和摄入成本不得混为同一种事件；现金时间与业务发生时间分别保存。
+- 每个完全计价的成本层及其批次在一个完整成本版本下，剩余库存价值、active 摄入成本、有效损耗/退货成本及必要舍入尾差必须与净取得成本守恒。
+- 成本修正不能改变数量账本、allocation 批次、计划或成分事实。
+- 金额聚合使用相同 baseCurrency；无确认换算的外币不得进入基准币种总额。
+- 报表存在 unknown 时必须返回覆盖率和未知数量，不能只返回一个看似完整的总额。
+- 服务端计算不使用 binary float 作为货币权威，最后一笔尾差处理保证批次总额可对账。
+
+### 11.20 验收标准
+
+- Given 用户不填批次价格，When 保存批次并记录 intake，Then 批次和 allocation 成本均为 unknown，页面显示未计价，不显示 ¥0。
+- Given 用户明确把赠品批次保存为 known_zero，When 记录 intake，Then 成本覆盖率包含该记录，金额为 ¥0 并可查看赠品来源。
+- Given 批次 30 粒实际支付 ¥60，When 记录 3 粒，Then 单位成本为 ¥2、摄入成本为 ¥6、剩余库存价值为 ¥54。
+- Given 先使用 ¥25/5 粒批次的 5 粒，再使用 ¥100/10 粒批次的 1 粒，When 记录 6 粒，Then intake 成本为 ¥35，并保留两条 allocation 明细。
+- Given 一条 intake 跨已计价和 unknown 两个批次，When 查看详情，Then 显示已知金额、未知数量和覆盖率，不把 intake 总成本写成完整金额。
+- Given 用户两周后为 unknown 批次补填总价，When 成本重述完成，Then 该批次历史 active intake、损耗和库存价值按新版本更新，原快照和修改时间仍可查看。
+- Given 用户把批次价格从 ¥60 修正为 ¥90，When 该批已摄入 5/30 粒，Then 默认历史摄入按 ¥3/粒重述，且能查看旧版 ¥2/粒及差额原因。
+- Given 用户把原购入数量从 30 修正为 60 且总支付仍为 ¥60，When 创建新成本版本，Then 单位成本重述为 ¥1，不把新增 30 粒按旧 ¥2 计价。
+- Given 用户正向盘点增加 10 粒但选择成本未知，When 查看库存价值，Then 新增数量进入 unpricedQuantity，旧批已知价值不被错误扩张。
+- Given 一个批次先有 5 粒已计价数量，后增加 3 粒 unknown 层，When 记录 6 粒，Then 成本层先释放 5 粒已知成本和 1 粒 unknown，结果显示部分计价而不是把旧单价应用到第 6 粒。
+- Given 丢弃已计价批次 2 粒，When 原因为 expired discard，Then 库存减少并产生对应 inventoryLossCost，不增加 consumptionCost。
+- Given 用户撤销一条已计价 intake，When 事务成功，Then 原批次数量和库存价值恢复、原摄入成本精确冲回，购买支出不变。
+- Given 用户更正 intake 并改从另一批次分配，When 保存成功，Then 旧 allocation 成本冲回，新批次成本写入，整个事务无半完成状态。
+- Given 商品获得 ¥10 部分退款且数量不变，When 保存，Then refundReceived 归属退款日期，批次净取得成本减少并重述单位成本。
+- Given 全额退货，When 同一流程提交数量和退款，Then 库存减少、退款事件存在、该批次不产生损耗成本，任一步失败都不留下半状态。
+- Given 购买金额为 USD 20 但没有确认人民币结算额，When 查看总账，Then USD 20 单列，CNY 汇总标为 incomplete，不调用实时汇率换算。
+- Given 成本范围同时包含购买和摄入，When 查看页面，Then 分别显示现金支出和摄入成本，不输出二者相加的“总花费”。
+- Given 过期库存仍在手，When 查看库存价值，Then 历史取得成本保留在 expiredInventoryValue，不进入可自动分配库存价值。
+- Given 历史旧批次 price_cny=0，When 迁移，Then costStatus=unknown；只有用户确认后才能成为 known_zero。
+- Given 同一批次完全消耗且多次 allocation 显示舍入，When 对账，Then 精确 allocation 总成本等于净取得成本，尾差只由最后一笔承担。
+- Given 成本重述中途失败，When 打开成本页，Then 继续展示上一完整版本并提示失败，不混合部分新旧金额。
+
+### 11.21 本模块确认点
+
+本模块建议冻结以下产品判断：
+
+1. 成本是完全选填的辅助能力；unknown 绝不等于 0，known_zero 必须由用户明确确认。
+2. R1 使用工作区基准币种 CNY；海外购买优先录入实际人民币结算额，R2 可保留外币原值和人工确认汇率，但不接实时汇率改写历史。
+3. 批次单位成本以“净取得成本 ÷ costBasisQuantity”计算；实际支付可简单输入，也可选填运费、税费、优惠和退款拆分。
+4. 后补价格、价格修正、购入数量修正和退款创建不可变成本版本，并对历史 active allocation 做带审计的成本重述；不只影响未来记录。
+5. 购买支出、退款、实际摄入成本、非摄入损耗和库存价值分开呈现；计划成本只能标为估算。
+6. intake 撤销/更正精确冲回原 allocation 成本；库存 adjustment 必须根据原因裁决成本分母、损耗或未知新增量。
+7. 金额使用整数最小币种单位和 decimal 计算；存在未计价数据时返回已知金额、未知数量和覆盖率，不生成伪完整总额。
+
+请确认模块 11。确认后，模块 12 将定义成分标准化、历史成分版本、实际摄入日历、手工成分记录、单位换算、来源拆分与 CSV 导出合同。

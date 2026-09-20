@@ -135,7 +135,7 @@ representations.
 | Slice | Demonstrable result | Required evidence | Status |
 | --- | --- | --- | --- |
 | S0 | Active docs, owners, work IDs, CI path and evidence directories are clear | Document/link audit, RG0 checklist | In progress; standalone repository and hosted CI active, owner names and branch protection open |
-| S1 | Target expand migrations apply to empty DB and a current snapshot without destructive cutover | Migration report, counts, lock time, rollback point | In progress; platform spine verified, E2–E6 open |
+| S1 | Target expand migrations apply to empty DB and a current snapshot without destructive cutover | Migration report, counts, lock time, rollback point | In progress; platform spine and E2 Product/Profile verified locally, E3–E6 open |
 | S2 | ClientAction/result lookup and DomainChange/outbox support one harmless write end to end | Contract + integration + duplicate/restart tests | Not started |
 | S3 | Identity/Demo/admin/deletion run on compatibility schema with target audit and authorization | Cross-tenant, step-up, deletion residue tests | Not started |
 | S4 | One independent capture slot can upload, process, be replaced, become stale, and fall back manually | File/job/evidence integration + H5 state test | Not started |
@@ -149,6 +149,10 @@ representations.
 Platform-spine evidence for standalone implementation commit `d45dae5` is recorded in
 `../reports/r1/2026-09-19-s1-platform-spine/README.md`. It closes only S1-03 and
 the synthetic local rehearsal portion of S1-04; it does not close S1 or RG2.
+E2 Product/Profile evidence for implementation commit `e667a08` is recorded in
+`../reports/r1/2026-09-20-s1-product-profile/README.md`. It closes the local E2
+expand/backfill/compatibility sub-slice only; E3-E6, scale rehearsal, target-read
+cutover, staging, and production evidence remain open.
 
 ## 8. Schema and migration deliverables
 

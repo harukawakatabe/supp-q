@@ -1,9 +1,10 @@
 # R1 Physical Schema Specification
 
-Status: draft implementation specification; platform spine verified locally at standalone commit `d45dae5`
+Status: draft implementation specification; platform spine verified locally at
+`d45dae5`, E2 Product/Profile verified locally at `e667a08`
 Authority: derives from `../prd/PRD.md` sections 15–16 and does not change scope
 Migration strategy: expand → backfill → compatibility → validate → later contract
-Last updated: 2026-09-19
+Last updated: 2026-09-20
 
 ## 1. Direct conclusion
 
@@ -12,10 +13,11 @@ represent the confirmed R1 history and state contracts without ambiguity. R1
 therefore adds immutable versions, independent state dimensions, command
 idempotency, a durable outbox, and projection revisions before page migration.
 
-The first implemented migration, `202609190001_r1_platform_spine.sql`, adds only
-cross-cutting infrastructure and legacy-row quarantine evidence. It does not
-switch current API reads/writes to the target model and does not mean S1 is
-complete.
+The platform migration `202609190001_r1_platform_spine.sql` adds cross-cutting
+infrastructure and quarantine evidence. E2 migration
+`202609200001_r1_product_profiles.sql` adds Product/Profile/Ingredient shadow
+facts and compatibility writes. Legacy reads remain authoritative; neither
+migration means S1 or target-read cutover is complete.
 
 ## 2. Naming and storage conventions
 
@@ -129,7 +131,7 @@ Quarantine registration is not enforcement. Ordinary API filtering and
 controlled resolution are separate implementation tasks and must pass before
 R1 release.
 
-## 5. Product and label profile — next expand group
+## 5. Product and label profile — E2 implemented locally
 
 | Table | Role | Required constraints |
 | --- | --- | --- |

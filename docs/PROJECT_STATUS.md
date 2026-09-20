@@ -1,6 +1,6 @@
 # Project Status
 
-Last updated: 2026-09-19
+Last updated: 2026-09-20
 
 ## Direct conclusion
 
@@ -33,14 +33,16 @@ Confidence:
 - R1 workstreams and dependencies: `IMPLEMENTATION_PLAN_R1.md`.
 - Execution/owners: `EXECUTION_REGISTRY_R1.md`; actual human owner names and
   branch-protection enforcement remain open.
-- Physical schema: `SCHEMA_R1.md`; the first platform-spine migration is locally
-  verified, while the remaining R1 expand/backfill groups are open.
+- Physical schema: `SCHEMA_R1.md`; the platform spine and E2
+  Product/Profile/Ingredient migration are locally verified, while E3-E6 and
+  target-read cutover remain open.
 - Release evidence: `R1_GATE_CHECKLIST.md`; RG0–RG4 are partial where noted and
   no production Gate is accepted for target R1.
 - UI direction: user-provided `DESIGN.md`, adapted through
   `DESIGN_IMPLEMENTATION_R1.md`.
-- No complete R1 vertical slice has been claimed; only the S1 platform-spine
-  sub-slice has `VERIFIED_LOCAL` evidence.
+- No complete R1 vertical slice has been claimed; only the S1 platform spine and
+  E2 Product/Profile/Ingredient expand/backfill sub-slices have
+  `VERIFIED_LOCAL` evidence.
 
 ## Shipped to production
 
@@ -70,12 +72,19 @@ or accepted recognition provider has been supplied.
 
 ### Data, recognition, and tenancy
 
-- PostgreSQL migrations through `202609190001`; the new, currently unused R1
-  platform spine adds workspace timezone versions, ClientAction, DomainChange,
-  consumer receipts, projection revisions, and unsupported-product quarantine.
-- Fresh, synthetic Launch-Beta snapshot upgrade, compatibility and pre-target-
-  write rollback tests pass for standalone implementation commit `d45dae5`; this does not
-  mean the remaining target schema/backfills are implemented.
+- PostgreSQL migrations through `202609200001`. The R1 platform spine adds
+  workspace timezone versions, ClientAction, DomainChange, consumer receipts,
+  projection revisions, and unsupported-product quarantine. E2 adds immutable
+  ProductProfile/IngredientProfile versions, media/deletion support tables,
+  durable batched catch-up state, Product pointers, and batch formula binding.
+- Fresh and synthetic Launch-Beta snapshot upgrades, resumable E2 catch-up,
+  N-1 drift snapshots, compatibility paths, parent cleanup, pre-target-write
+  rollback, and post-target-write rollback refusal pass for E2 implementation
+  commit `e667a08`; this does not mean E3-E6 or target-read cutover exists.
+- Product create/update and recognition confirmation dual-write the E2 profiles
+  transactionally while legacy reads remain authoritative. Existing/new
+  batches bind the applicable IngredientProfile. OTC/prescription rows are
+  quarantined and hidden; new ordinary creation is rejected.
 - Six-decimal quantities,
   transactionally consistent FEFO allocation, idempotency, and tenant scope on
   private resources.
@@ -162,6 +171,9 @@ image was sent to a provider in this work.
   confirmation path completed after the default seven-volume allocation.
 - Evidence uses generated one-pixel images and `fake:development`; it proves
   local/CI orchestration, not recognition accuracy or production storage.
+- The repaired main baseline then passed hosted run `35453181201` at commit
+  `04538ce`; its retained integration artifact digest is
+  `sha256:25db16dbc8743ad7126889e7faef39cd3447e37b6c286e428d82a1b9af0519c7`.
 
 ## Remaining production gates
 
@@ -189,8 +201,9 @@ release candidate**, not **online production**.
 
 ## Complete target not yet implemented
 
-- R1 target schema/state/version contracts, independent capture slots, complete
-  occurrence/intake/inventory/reminder projections, target UI and release gates.
+- Remaining R1 plan/occurrence, independent capture, enriched
+  intake/inventory, risk/reminder schema and projections, target-read cutover,
+  target UI and release gates.
 - R2 cost ledger, ingredient understanding/calendar, exports, and manual notes.
 - R3 controlled supplement AI and purpose-bound minimum health context.
 - R4 external notifications, WeChat login/upload and mini-program UI.
@@ -206,5 +219,7 @@ release candidate**, not **online production**.
   SMTP.
 - Production backup tooling depends on `pg_dump`/`pg_restore`, MinIO `mc`, and
   `age`; those tools and real destinations are external operational resources.
-- `.github/workflows/ci.yml` is active in the independent `supp-q` repository;
-  branch protection and required-check enforcement remain open RG1 work.
+- `.github/workflows/ci.yml` is active in the independent `supp-q` repository.
+  GitHub reports that rulesets are not enforceable for this private repository
+  under the current personal-account plan, so branch protection and
+  required-check enforcement remain open RG1 work.

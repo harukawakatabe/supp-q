@@ -1,7 +1,7 @@
 # R1 RG0–RG9 Gate Checklist
 
 Status: active; no production gate is currently accepted
-Last updated: 2026-09-19
+Last updated: 2026-09-20
 
 ## Status vocabulary
 
@@ -21,8 +21,8 @@ and a stable evidence location.
 | Gate | Current status | Why |
 | --- | --- | --- |
 | RG0 Contract ready | `PARTIAL` | PRD is confirmed; named owners and target physical schema/OpenAPI/error/migration specifications remain open |
-| RG1 Repeatable build | `PARTIAL` | Historical Launch-Beta local checks passed; target R1 and active root CI have not |
-| RG2 Migration safe | `PARTIAL` | The platform spine passes fresh/synthetic-current upgrade and rollback; product/capture/plan/intake/reminder backfills, lock rehearsal and production-like evidence remain open |
+| RG1 Repeatable build | `PARTIAL` | Main baseline hosted CI and E2 local checks pass; E2 hosted PR CI, enforceable branch rules, scans and immutable promotion evidence remain open |
+| RG2 Migration safe | `PARTIAL` | Platform spine and E2 Product/Profile migration pass local fresh/synthetic-current/restart/rollback guards; E3-E6, scale/lock and production-like evidence remain open |
 | RG3 Domain/security correct | `PARTIAL` | Current FEFO/idempotency/tenant foundation exists; complete R1-applicable Q1–Q9 coverage does not |
 | RG4 H5 experience | `PARTIAL` | Current Chromium Launch-Beta path exists; target IA/design/accessibility/browser matrix does not |
 | RG5 Performance/resilience | `OPEN` | Target load, SLO, failure injection, alert and recovery evidence is absent |
@@ -51,6 +51,13 @@ SeaweedFS retained 232 free slots after its default seven-volume growth, Go
 integration passed, and Playwright completed with 8 passed, 2 intentional
 skips, and 0 failures. This is Fake/local evidence and does not close RG1.
 
+Hosted run `35453181201` passed client, server, and integration E2E at main
+commit `04538ce`, retaining artifact digest
+`sha256:25db16dbc8743ad7126889e7faef39cd3447e37b6c286e428d82a1b9af0519c7`.
+GitHub reports that rulesets will not be enforced for this private repository
+under the current personal-account plan; no ruleset was created as fake
+evidence.
+
 - [ ] CI runs from the actual repository root with branch protection.
 - [ ] Node/pnpm/Go/base images and third-party actions are pinned.
 - [ ] Type-check, lint/format, unit, integration, contract, H5 build, and Go builds pass.
@@ -62,19 +69,22 @@ Pass owner: Engineering + QA.
 
 ## RG2 — Migration safe
 
-- [x] Empty database `up` succeeds for the platform-spine migration.
-- [x] A representative synthetic current Launch-Beta snapshot upgrades without reset.
+- [x] Empty database `up` succeeds through platform spine and E2 Product/Profile.
+- [x] A representative synthetic current Launch-Beta snapshot upgrades through E2 without reset.
 - [x] Source inventory includes state/type/timezone/price/job/file anomalies.
-- [ ] Backfill is cursor-based, idempotent, resumable, and observable.
+- [x] E2 Product/Profile backfill is cursor-based, batched, idempotent, restartable between committed batches, and exposes cycle/count/timestamps.
+- [ ] E3-E6 backfills provide the same cursor/restart/observation contract.
 - [ ] Lock targets and the ≤15-minute final-delta window pass rehearsal.
-- [ ] Product/plan/intake/inventory/cost/file/timezone counts and invariants reconcile.
+- [x] E2 Product/Profile/Ingredient/batch counts, raw-field drift, tenant links and interval invariants reconcile locally.
+- [ ] Plan/capture/intake/inventory/risk/reminder reconciliation for E3-E6 passes.
 - [x] OTC/prescription fixture rows are quarantined and individually accounted for.
-- [x] Existing identity/catalog/recognition integration paths and pre-target-write Down rollback pass locally.
+- [x] Existing identity/catalog/recognition paths, cleanup with Products, pre-target-write Down, and post-target-write Down refusal pass locally.
 - [ ] Production-like backup/restore point, old deployed binary compatibility, and real snapshot reconciliation are proven.
 - [x] Contract/drop migration remains deferred to a later release.
 
-Current evidence: standalone implementation commit `d45dae5` and
-`../reports/r1/2026-09-19-s1-platform-spine/README.md`. All checked items above
+Current evidence: platform commit `d45dae5`, E2 implementation commit
+`e667a08`, `../reports/r1/2026-09-19-s1-platform-spine/README.md`, and
+`../reports/r1/2026-09-20-s1-product-profile/README.md`. All checked items above
 are local/synthetic evidence, not staging or production acceptance.
 
 Pass owner: Engineering + Domain/Data + QA.

@@ -3,7 +3,7 @@
 Status: active execution control
 Contract: `../prd/PRD.md`
 Plan: `IMPLEMENTATION_PLAN_R1.md`
-Last updated: 2026-09-19
+Last updated: 2026-09-20
 
 ## 1. Direct conclusion
 
@@ -14,10 +14,12 @@ and RG1 cannot pass yet:
 - the repository was extracted with path history to
   `github.com/harukawakatabe/supp-q` on 2026-09-19;
 - `.github/workflows/ci.yml` is active on pushes to `main` and pull requests;
-- hosted run `35442408074` passed client, server, and integration E2E at commit
-  `55587f9` and retained the integration evidence artifact;
-- branch protection and required-check policy remain unconfigured evidence for
-  RG1.
+- hosted run `35453181201` passed client, server, and integration E2E at main
+  commit `04538ce` and retained artifact digest
+  `sha256:25db16dbc8743ad7126889e7faef39cd3447e37b6c286e428d82a1b9af0519c7`;
+- GitHub currently has no ruleset for the repository and reports that rulesets
+  are not enforced for this private personal-account repository until it is
+  moved to a GitHub Team organization. RG1 enforcement therefore remains open.
 
 Codex may implement and verify changes, but it is not the Product, Security,
 QA, or Operations signatory. A single human may hold several roles, but each
@@ -32,7 +34,7 @@ role's decision and evidence must be recorded separately.
 | Local execution root | Repository root | `make check`, `make test`, `make build`, and integration commands run here |
 | Hosted CI | `.github/workflows/ci.yml` | Active on GitHub `main` pushes and pull requests |
 | Former parent | `supplement-record/` | Frozen migration source and rollback evidence only |
-| RG1 status | `PARTIAL` | Local and hosted execution exist; branch protection and required-check policy remain open |
+| RG1 status | `PARTIAL` | Local and hosted execution exist; the current account/repository plan cannot enforce branch rulesets |
 
 ## 3. Role registry
 
@@ -56,14 +58,15 @@ Gate acceptance and all production promotion.
 | --- | --- | --- | --- |
 | S0-01 | Document authority and archive map | `DONE_LOCAL` | `DOCUMENT_AUTHORITY.md`; standalone commit `d22437b` |
 | S0-02 | Role and responsibility registry | `DONE_LOCAL_WITH_OPEN_OWNER` | This document; actual names remain `OPEN_OD_01` |
-| S0-03 | CI/repository-root decision | `DONE_REMOTE` | Extracted to `harukawakatabe/supp-q`; hosted run `35442408074` passed all jobs at `55587f9`; branch-protection evidence remains under RG1 |
+| S0-03 | CI/repository-root decision | `DONE_REMOTE` | Extracted to `harukawakatabe/supp-q`; hosted run `35453181201` passed all jobs at `04538ce`; private-repository ruleset enforcement remains under RG1 |
 | S0-04 | Evidence locations and classification | `DONE_LOCAL` | Section 5 |
 | S0-05 | ChangeSpec template | `DONE_LOCAL` | `templates/CHANGE_SPEC.md` |
 | S1-01 | Target physical schema specification | `DRAFT_IMPLEMENTATION_SPEC` | `SCHEMA_R1.md`; review pending |
 | S1-02 | Current-snapshot inventory queries | `VERIFIED_LOCAL` | `../scripts/sql/r1_source_inventory.sql`; isolated PostgreSQL execution passed |
 | S1-03 | Platform-spine expand migration | `VERIFIED_LOCAL` | Standalone implementation commit `d45dae5`; fresh/upgrade/rollback tests passed |
 | S1-04 | Fresh/current-snapshot migration rehearsal | `VERIFIED_LOCAL` | Synthetic Launch-Beta fixture; evidence in `../reports/r1/2026-09-19-s1-platform-spine/README.md` |
-| S1-05 | Remaining R1 expand/backfill migrations | `NOT_STARTED` | Product/capture/plan/intake/reminder tables after S1-03 review |
+| S1-05 | E2 Product/Profile/Ingredient expand, backfill, reconciliation, compatibility writes | `VERIFIED_LOCAL` | Implementation `e667a08`; evidence in `../reports/r1/2026-09-20-s1-product-profile/README.md` |
+| S1-06 | E3-E6 plan/capture/intake-inventory/risk-reminder expand groups | `NOT_STARTED` | Begin with E3 only after E2 PR CI is accepted |
 
 State vocabulary:
 
@@ -95,11 +98,10 @@ The next valid transition is:
 
 ```text
 platform spine VERIFIED_LOCAL at d45dae5
-→ accountable engineering/domain review of SCHEMA_R1.md
-→ E2 product/profile/ingredient expand migration
-→ synthetic current-snapshot backfill and reconciliation
-→ compatibility service reads/writes
-→ continue E3–E6 only after E2 evidence passes
+→ E2 Product/Profile/Ingredient VERIFIED_LOCAL at e667a08
+→ hosted PR CI and review
+→ E3 plan/timezone/occurrence expand migration
+→ continue E4–E6 only after each preceding evidence slice passes
 ```
 
 Do not claim S1 complete when only the platform spine passes. S1 closes only

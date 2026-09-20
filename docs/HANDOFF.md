@@ -4,9 +4,10 @@
 
 This repository is the only active implementation. The complete product contract is
 confirmed, and `docs/IMPLEMENTATION_PLAN_R1.md` is the current execution plan.
-The R1 platform-spine migration at standalone implementation commit `d45dae5` is locally
-verified on fresh and synthetic current snapshots; remaining R1 schema groups
-and every production Gate are still open.
+The R1 platform-spine migration at `d45dae5` and E2
+Product/Profile/Ingredient migration at standalone implementation commit
+`e667a08` are locally verified on fresh and synthetic current snapshots. E3-E6,
+target-read cutover, and every production Gate are still open.
 The code is still a locally accepted H5 release candidate with the deterministic supplement loop, invitation identity, private
 three-image recognition boundary, Records/product/Me surfaces, account/file
 cleanup, production Compose/Caddy, health/metrics, encrypted backup/restore
@@ -71,8 +72,11 @@ explicitly authorizes destroying local data.
 
 `app/package.json` and hosted CI pin `pnpm@11.9.0`. On 2026-09-19, a clean
 standalone clone completed `make install`, `make check`, `make test`, and
-`make build` through the pinned package-manager path. Hosted run `35442408074`
-then passed client, server, and integration E2E at commit `55587f9`.
+`make build` through the pinned package-manager path. Hosted run `35453181201`
+passed client, server, and integration E2E at main commit `04538ce`. The E2
+branch has separate local evidence in
+`reports/r1/2026-09-20-s1-product-profile/README.md`; require its PR CI before
+merge.
 
 ## Production path
 
@@ -116,6 +120,14 @@ then passed client, server, and integration E2E at commit `55587f9`.
   free slot does not prove that the upload collection can allocate a batch.
 - Product edits must preserve day-cycle history. The service reconstructs that
   history in `ScheduleView`; removing it changes past Today calculations.
+- E2 keeps legacy Product/ingredient reads authoritative. Writes must update
+  legacy facts and append target profiles in one transaction; never rewrite an
+  activated profile or rebind an older batch to a newer formula.
+- `r1_backfill_product_profiles_batch` is the restartable N-1 catch-up path.
+  Do not replace it with a full-table blind rewrite, and do not run E2 Down
+  after the guard reports target writes.
+- OTC/prescription rows remain quarantine-only and absent from ordinary APIs;
+  do not add a placeholder management entry or medication-advice path.
 - `.github/workflows/ci.yml` is active in the standalone repository. Keep pnpm
   installation before `actions/setup-node` while pnpm caching is enabled.
 

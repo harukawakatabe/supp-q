@@ -6,8 +6,9 @@ This repository is the only active implementation. The complete product contract
 confirmed, and `docs/IMPLEMENTATION_PLAN_R1.md` is the current execution plan.
 The R1 platform-spine migration at `d45dae5` and E2
 Product/Profile/Ingredient migration at standalone implementation commit
-`e667a08` are locally verified on fresh and synthetic current snapshots. E3-E6,
-target-read cutover, and every production Gate are still open.
+`e667a08`, plus E3 ProductPlan/ScheduleVersion at `fcc9dda`, are locally
+verified on fresh and synthetic current snapshots. E4-E6, target-read cutover,
+and every production Gate are still open.
 The code is still a locally accepted H5 release candidate with the deterministic supplement loop, invitation identity, private
 three-image recognition boundary, Records/product/Me surfaces, account/file
 cleanup, production Compose/Caddy, health/metrics, encrypted backup/restore
@@ -73,10 +74,12 @@ explicitly authorizes destroying local data.
 `app/package.json` and hosted CI pin `pnpm@11.9.0`. On 2026-09-19, a clean
 standalone clone completed `make install`, `make check`, `make test`, and
 `make build` through the pinned package-manager path. Hosted run `35453181201`
-passed client, server, and integration E2E at main commit `04538ce`. The E2
-branch has separate local evidence in
-`reports/r1/2026-09-20-s1-product-profile/README.md`; require its PR CI before
-merge.
+passed client, server, and integration E2E at main commit `04538ce`. The GitHub
+API reported the repository as public on 2026-09-20. The owner selected direct
+delivery on `r1-e2-product-profile`, with no PR and no `main` merge. The current
+workflow only runs for PRs or `main` pushes, so E2/E3 evidence is local only:
+`reports/r1/2026-09-20-s1-product-profile/README.md` and
+`reports/r1/2026-09-20-s1-product-plan/README.md`.
 
 ## Production path
 
@@ -126,6 +129,18 @@ merge.
 - `r1_backfill_product_profiles_batch` is the restartable N-1 catch-up path.
   Do not replace it with a full-table blind rewrite, and do not run E2 Down
   after the guard reports target writes.
+- E3 keeps legacy Product/Today schedule reads authoritative. Create,
+  recognition confirmation, and update must dual-write plan facts in the same
+  transaction. Product metadata changes and identical PUTs must not append a
+  ScheduleVersion; pause/resume must not be inferred from inventory.
+- `r1_backfill_product_plans_batch` is the restartable E3 catch-up path. Invalid,
+  duplicate, or count-mismatched reminder times are quarantined; never average
+  dose quantity or invent a slot. Do not run E3 Down after application plan
+  writes or occurrences exist.
+- Occurrence identity is SHA-256 deterministic. `planStartDate` is a hard lower
+  boundary; DST gaps shift forward and folds choose the earlier instant. The
+  current evaluator is a shadow component and must not be wired into Today
+  before C1 comparison evidence.
 - OTC/prescription rows remain quarantine-only and absent from ordinary APIs;
   do not add a placeholder management entry or medication-advice path.
 - `.github/workflows/ci.yml` is active in the standalone repository. Keep pnpm

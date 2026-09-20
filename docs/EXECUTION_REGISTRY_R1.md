@@ -17,9 +17,12 @@ and RG1 cannot pass yet:
 - hosted run `35453181201` passed client, server, and integration E2E at main
   commit `04538ce` and retained artifact digest
   `sha256:25db16dbc8743ad7126889e7faef39cd3447e37b6c286e428d82a1b9af0519c7`;
-- GitHub currently has no ruleset for the repository and reports that rulesets
-  are not enforced for this private personal-account repository until it is
-  moved to a GitHub Team organization. RG1 enforcement therefore remains open.
+- the GitHub API reported the repository as `public` on 2026-09-20;
+- the owner selected direct development-branch delivery without a PR. Because
+  CI triggers only pull requests and pushes to `main`, the E2/E3 development
+  branch has local evidence but no hosted branch run;
+- branch protection/ruleset enforcement has not been configured and verified.
+  RG1 enforcement therefore remains open.
 
 Codex may implement and verify changes, but it is not the Product, Security,
 QA, or Operations signatory. A single human may hold several roles, but each
@@ -34,7 +37,9 @@ role's decision and evidence must be recorded separately.
 | Local execution root | Repository root | `make check`, `make test`, `make build`, and integration commands run here |
 | Hosted CI | `.github/workflows/ci.yml` | Active on GitHub `main` pushes and pull requests |
 | Former parent | `supplement-record/` | Frozen migration source and rollback evidence only |
-| RG1 status | `PARTIAL` | Local and hosted execution exist; the current account/repository plan cannot enforce branch rulesets |
+| Repository visibility | `public` | Verified through the GitHub API on 2026-09-20 |
+| Delivery policy | Direct development branch; no PR; do not update `main` | Branch work needs explicit local evidence because current CI does not run on ordinary development-branch pushes |
+| RG1 status | `PARTIAL` | Main has historical hosted CI; current branch has local evidence only and branch enforcement is unverified |
 
 ## 3. Role registry
 
@@ -58,7 +63,7 @@ Gate acceptance and all production promotion.
 | --- | --- | --- | --- |
 | S0-01 | Document authority and archive map | `DONE_LOCAL` | `DOCUMENT_AUTHORITY.md`; standalone commit `d22437b` |
 | S0-02 | Role and responsibility registry | `DONE_LOCAL_WITH_OPEN_OWNER` | This document; actual names remain `OPEN_OD_01` |
-| S0-03 | CI/repository-root decision | `DONE_REMOTE` | Extracted to `harukawakatabe/supp-q`; hosted run `35453181201` passed all jobs at `04538ce`; private-repository ruleset enforcement remains under RG1 |
+| S0-03 | CI/repository-root decision | `DONE_REMOTE` | Public `harukawakatabe/supp-q`; hosted main run `35453181201` passed at `04538ce`; direct development-branch/no-PR policy is active; enforcement remains under RG1 |
 | S0-04 | Evidence locations and classification | `DONE_LOCAL` | Section 5 |
 | S0-05 | ChangeSpec template | `DONE_LOCAL` | `templates/CHANGE_SPEC.md` |
 | S1-01 | Target physical schema specification | `DRAFT_IMPLEMENTATION_SPEC` | `SCHEMA_R1.md`; review pending |
@@ -66,7 +71,8 @@ Gate acceptance and all production promotion.
 | S1-03 | Platform-spine expand migration | `VERIFIED_LOCAL` | Standalone implementation commit `d45dae5`; fresh/upgrade/rollback tests passed |
 | S1-04 | Fresh/current-snapshot migration rehearsal | `VERIFIED_LOCAL` | Synthetic Launch-Beta fixture; evidence in `../reports/r1/2026-09-19-s1-platform-spine/README.md` |
 | S1-05 | E2 Product/Profile/Ingredient expand, backfill, reconciliation, compatibility writes | `VERIFIED_LOCAL` | Implementation `e667a08`; evidence in `../reports/r1/2026-09-20-s1-product-profile/README.md` |
-| S1-06 | E3-E6 plan/capture/intake-inventory/risk-reminder expand groups | `NOT_STARTED` | Begin with E3 only after E2 PR CI is accepted |
+| S1-06 | E3 ProductPlan/ScheduleVersion/DoseSlot/PlanStateInterval expand, backfill, evaluator, reconciliation, compatibility writes | `VERIFIED_LOCAL` | Implementation `fcc9dda`; evidence in `../reports/r1/2026-09-20-s1-product-plan/README.md`; old schedule reads remain authoritative |
+| S1-07 | E4-E6 capture/intake-inventory/risk-reminder expand groups | `NOT_STARTED` | Continue sequentially; each slice requires its own local runtime evidence |
 
 State vocabulary:
 
@@ -99,8 +105,8 @@ The next valid transition is:
 ```text
 platform spine VERIFIED_LOCAL at d45dae5
 → E2 Product/Profile/Ingredient VERIFIED_LOCAL at e667a08
-→ hosted PR CI and review
-→ E3 plan/timezone/occurrence expand migration
+→ E3 ProductPlan/ScheduleVersion VERIFIED_LOCAL at fcc9dda
+→ push the owner-selected development branch without PR or main merge
 → continue E4–E6 only after each preceding evidence slice passes
 ```
 

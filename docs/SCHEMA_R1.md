@@ -1,7 +1,8 @@
 # R1 Physical Schema Specification
 
 Status: draft implementation specification; platform spine verified locally at
-`d45dae5`, E2 Product/Profile verified locally at `e667a08`
+`d45dae5`, E2 Product/Profile verified locally at `e667a08`, and E3
+ProductPlan/ScheduleVersion verified locally at `fcc9dda`
 Authority: derives from `../prd/PRD.md` sections 15–16 and does not change scope
 Migration strategy: expand → backfill → compatibility → validate → later contract
 Last updated: 2026-09-20
@@ -16,8 +17,11 @@ idempotency, a durable outbox, and projection revisions before page migration.
 The platform migration `202609190001_r1_platform_spine.sql` adds cross-cutting
 infrastructure and quarantine evidence. E2 migration
 `202609200001_r1_product_profiles.sql` adds Product/Profile/Ingredient shadow
-facts and compatibility writes. Legacy reads remain authoritative; neither
-migration means S1 or target-read cutover is complete.
+facts and compatibility writes. E3 migration
+`202609200002_r1_product_plans.sql` adds ProductPlan/ScheduleVersion/DoseSlot/
+PlanStateInterval shadow facts, the occurrence identity contract, and
+compatibility writes. Legacy reads remain authoritative; these migrations do
+not mean S1 or target-read cutover is complete.
 
 ## 2. Naming and storage conventions
 
@@ -248,7 +252,7 @@ The current `recognition_sets` path remains valid during compatibility. Target
 confirmation creates Product/profile/ingredient/schedule/opening inventory,
 source links, ClientAction, and DomainChange in one transaction.
 
-## 7. Product plan and occurrence — later expand group
+## 7. Product plan and occurrence — E3 implemented locally
 
 | Table | Role | Required constraints |
 | --- | --- | --- |
@@ -258,9 +262,56 @@ source links, ClientAction, and DomainChange in one transaction.
 | `plan_state_intervals` | Active/paused history with reason | No overlapping intervals per plan |
 | `scheduled_occurrences` | Rebuildable deterministic projection | Unique workspace + product + schedule version + local date + dose slot |
 
-Schedule versions store the timezone version and timezone/offset snapshot needed
-for historical interpretation. Occurrence execution state is derived from valid
-intakes; it is never a manually editable completion flag.
+`product_plans` is tenant-bound one-to-one with Product and stores an independent
+aggregate version plus the current ScheduleVersion pointer. Every
+`schedule_versions` row binds the E2 ProductProfileVersion and the immutable
+WorkspaceTimezoneVersion, keeps the IANA zone and runtime ruleset label, and
+stores one complete weekly/day-cycle/long-cycle rule snapshot. Active date
+intervals cannot overlap. Version bodies are immutable; only closing an open
+interval or cancelling the version being replaced at the same future boundary
+is allowed.
+
+`dose_slots` stores stable order, local time, per-occurrence quantity, meal
+relation, and label. Slot key, local time, and sort order are each unique within
+one ScheduleVersion. A migration maps legacy slots only when every reminder is
+a valid unique `HH:MM` value and reminder count equals
+`dose_times_per_day`; each target slot uses the source `dose_quantity`. Empty,
+invalid, duplicate, or count-mismatched schedules are quarantined rather than
+averaged, duplicated, or padded with a default time.
+
+`plan_state_intervals` is independent of inventory. Legacy `active` and
+`depleted` become an open active interval; `paused` and `archived` become an
+open paused interval. Because the source has no state history, migration rows
+use `legacy_current_only` and the observation instant; `updated_at` is not
+misrepresented as a historical pause instant. Application pause/resume appends
+intervals without creating a ScheduleVersion.
+
+Existing `day_cycle_versions` boundaries become immutable ScheduleVersions.
+Weekly, long-cycle, slot, ProductProfile, and timezone values that were never
+historically versioned are copied conservatively and marked
+`legacy_current_only`. `plan_start_date` remains a hard lower boundary even
+when a cycle anchor is earlier.
+
+`scheduled_occurrences` is a rebuildable projection and is not populated
+without a bounded materialization request. Its natural key is workspace,
+Product, ScheduleVersion, local date, and DoseSlot. ID is deterministic SHA-256
+over `scheduleVersionID|localDate|doseSlotID`, shaped as a UUID with version
+nibble 5. Each row stores the final UTC instant, IANA timezone, ruleset, actual
+offset, and resolution. Gap times shift forward by the gap and folds choose the
+earlier instant. Execution state is derived from valid intakes and is never an
+editable completion flag.
+
+`r1_backfill_product_plans_batch(size)` is cursor-based, resumable, idempotent,
+pauseable at a batch boundary, and exposes attempts, source/processed/mapped/
+unchanged/appended/quarantined counts, progress timestamps, and source hash.
+Manual create, recognition confirmation, and update dual-write target facts in
+the same transaction. Product metadata-only updates and repeated identical
+PUTs do not append a ScheduleVersion; real plan edits do. Legacy Product and
+Today reads remain authoritative until C1.
+
+E3 Down succeeds only while all target rows remain migration-owned and no
+occurrence exists. Application ScheduleVersion/PlanStateInterval writes or any
+occurrence force SQLSTATE `55000` and a forward fix.
 
 ## 8. Intake and inventory enrichment — later expand group
 
@@ -298,7 +349,7 @@ or external delivery.
 | --- | --- | --- | --- |
 | E1 | Platform spine and quarantine registry | Unchanged | Fresh/current upgrade and constraints |
 | E2 | Product/profile/ingredient expand tables and nullable pointers | Old columns remain authoritative | Row counts, version mapping, unsupported-row quarantine |
-| E3 | Plan/timezone/occurrence expand tables | Old schedule reads remain | Historical fixture and timezone/DST mapping |
+| E3 | Plan/timezone/occurrence expand tables | Old schedule reads remain | `VERIFIED_LOCAL` at `fcc9dda`; historical fixture, compatibility, timezone/DST and rollback guards pass |
 | E4 | Capture/evidence expand tables | Old recognition set remains | Slot-role/version mapping and late-result checks |
 | E5 | Intake/inventory metadata and constraints | Existing transactions remain | Q1–Q3 reconciliation and concurrency tests |
 | E6 | Risk/reminder tables | Old summary remains until service switch | Revision/dedupe/retry evidence |
@@ -339,4 +390,4 @@ The platform spine is locally verified only when:
 5. invalid hashes/states/revisions are rejected by database constraints;
 6. `r1_source_inventory.sql` and `r1_reconciliation.sql` return zero critical
    violations on the fixture;
-7. status documents still say S1 is partial until E2–E6 finish.
+7. status documents still say S1 is partial until E4–E6 finish.

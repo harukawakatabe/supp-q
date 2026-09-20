@@ -33,16 +33,16 @@ Confidence:
 - R1 workstreams and dependencies: `IMPLEMENTATION_PLAN_R1.md`.
 - Execution/owners: `EXECUTION_REGISTRY_R1.md`; actual human owner names and
   branch-protection enforcement remain open.
-- Physical schema: `SCHEMA_R1.md`; the platform spine and E2
-  Product/Profile/Ingredient migration are locally verified, while E3-E6 and
-  target-read cutover remain open.
+- Physical schema: `SCHEMA_R1.md`; the platform spine, E2
+  Product/Profile/Ingredient, and E3 ProductPlan/ScheduleVersion migrations are
+  locally verified, while E4-E6 and target-read cutover remain open.
 - Release evidence: `R1_GATE_CHECKLIST.md`; RG0–RG4 are partial where noted and
   no production Gate is accepted for target R1.
 - UI direction: user-provided `DESIGN.md`, adapted through
   `DESIGN_IMPLEMENTATION_R1.md`.
-- No complete R1 vertical slice has been claimed; only the S1 platform spine and
-  E2 Product/Profile/Ingredient expand/backfill sub-slices have
-  `VERIFIED_LOCAL` evidence.
+- No complete R1 vertical slice has been claimed; the S1 platform spine, E2
+  Product/Profile/Ingredient, and E3 ProductPlan/ScheduleVersion expand/
+  backfill sub-slices have `VERIFIED_LOCAL` evidence.
 
 ## Shipped to production
 
@@ -72,19 +72,31 @@ or accepted recognition provider has been supplied.
 
 ### Data, recognition, and tenancy
 
-- PostgreSQL migrations through `202609200001`. The R1 platform spine adds
+- PostgreSQL migrations through `202609200002`. The R1 platform spine adds
   workspace timezone versions, ClientAction, DomainChange, consumer receipts,
   projection revisions, and unsupported-product quarantine. E2 adds immutable
   ProductProfile/IngredientProfile versions, media/deletion support tables,
   durable batched catch-up state, Product pointers, and batch formula binding.
+  E3 adds ProductPlan, immutable ScheduleVersion, DoseSlot, PlanStateInterval,
+  ScheduledOccurrence identity/snapshots, and a resumable plan catch-up state.
 - Fresh and synthetic Launch-Beta snapshot upgrades, resumable E2 catch-up,
   N-1 drift snapshots, compatibility paths, parent cleanup, pre-target-write
   rollback, and post-target-write rollback refusal pass for E2 implementation
-  commit `e667a08`; this does not mean E3-E6 or target-read cutover exists.
-- Product create/update and recognition confirmation dual-write the E2 profiles
-  transactionally while legacy reads remain authoritative. Existing/new
+  commit `e667a08`.
+- Fresh/synthetic E3 upgrade, one-row resume, idempotent rerun, N-1 drift,
+  quarantine, tenant/immutability/interval constraints, parent cascade,
+  deterministic occurrence identity, and guarded Down pass for implementation
+  commit `fcc9dda`. This does not mean E4-E6 or target-read cutover exists.
+- Product create/update and recognition confirmation dual-write E2 profiles and
+  E3 plan facts transactionally while legacy reads remain authoritative.
+  Metadata-only/repeated plan updates do not create target schedule versions;
+  pause/resume is independent of depletion, intake, restock, and undo. Existing/new
   batches bind the applicable IngredientProfile. OTC/prescription rows are
   quarantined and hidden; new ordinary creation is rejected.
+- The shadow evaluator enforces plan-start/effective boundaries, weekly/day/
+  long-cycle intersection, deterministic per-slot IDs, IANA timezones, and the
+  fixed DST gap/fold policy. It is not connected to Today reads and does not
+  materialize an unbounded future horizon.
 - Six-decimal quantities,
   transactionally consistent FEFO allocation, idempotency, and tenant scope on
   private resources.
@@ -201,9 +213,9 @@ release candidate**, not **online production**.
 
 ## Complete target not yet implemented
 
-- Remaining R1 plan/occurrence, independent capture, enriched
-  intake/inventory, risk/reminder schema and projections, target-read cutover,
-  target UI and release gates.
+- Remaining R1 occurrence materialization/service cutover, independent capture,
+  enriched intake/inventory, risk/reminder schema and projections, target-read
+  cutover, target UI and release gates.
 - R2 cost ledger, ingredient understanding/calendar, exports, and manual notes.
 - R3 controlled supplement AI and purpose-bound minimum health context.
 - R4 external notifications, WeChat login/upload and mini-program UI.
@@ -220,6 +232,7 @@ release candidate**, not **online production**.
 - Production backup tooling depends on `pg_dump`/`pg_restore`, MinIO `mc`, and
   `age`; those tools and real destinations are external operational resources.
 - `.github/workflows/ci.yml` is active in the independent `supp-q` repository.
-  GitHub reports that rulesets are not enforceable for this private repository
-  under the current personal-account plan, so branch protection and
-  required-check enforcement remain open RG1 work.
+  The GitHub API reported the repository as public on 2026-09-20. The owner
+  selected direct development-branch delivery without PR or `main` merge; the
+  current workflow therefore provides no hosted branch run. Branch protection
+  and required-check enforcement remain open RG1 work.

@@ -96,10 +96,11 @@ implementation commit was created.
 - Main baseline commit `04538ce` has hosted CI run `35453181201` passing client,
   server, and integration E2E with artifact digest
   `sha256:25db16dbc8743ad7126889e7faef39cd3447e37b6c286e428d82a1b9af0519c7`.
-  Hosted PR CI for this E2 branch is separate evidence.
-- GitHub reported that repository rulesets are not enforced for this private
-  personal-account repository without moving to a GitHub Team organization;
-  RG1 branch-protection enforcement therefore remains open.
+  The owner subsequently selected direct development-branch delivery without a
+  PR or `main` merge, so this E2 branch has local evidence only.
+- The GitHub API reported the repository as public on 2026-09-20. Branch
+  protection/ruleset enforcement has not been configured and verified; RG1
+  therefore remains open.
 - C1 target-read cutover, FK/NOT NULL validation, representative-scale lock
-  rehearsal, real snapshot reconciliation, backup/restore, and E3-E6 remain
-  open.
+  rehearsal, real snapshot reconciliation, backup/restore, and E4-E6 remain
+  open. E3 has separate evidence in the adjacent ProductPlan report.

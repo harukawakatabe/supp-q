@@ -133,7 +133,7 @@ R1 release.
 
 | Table | Role | Required constraints |
 | --- | --- | --- |
-| `product_profile_versions` | Immutable name/brand/form/unit/serving profile | `(product_id, business_version)` unique; effective intervals do not overlap |
+| `product_profile_versions` | Immutable name/brand/form/management-unit profile | `(product_id, business_version)` unique; effective intervals do not overlap |
 | `ingredient_profile_versions` | Whole immutable label profile, including confirmed-empty | One current pointer per product; immutable after activation |
 | `ingredient_profile_items` | Original and optional normalized ingredient facts | Preserve raw name/value/unit; normalized fields nullable and source-versioned |
 | `product_media_links` | Purpose-bound link from Product to FileObject | Same-workspace validation; active interval and stable order |
@@ -143,6 +143,93 @@ The `products` aggregate will eventually retain only stable identity,
 `catalog_state`, `aggregate_version`, current-version pointers, source draft,
 and deletion state. Existing current columns remain compatibility reads until
 service cutover and reconciliation are complete.
+
+### 5.1 E2 physical contract
+
+E2 adds nullable `products.catalog_state`, `aggregate_version`,
+`current_product_profile_version_id`, and
+`current_ingredient_profile_version_id`. It does not add stored `stock_state` or
+`risk_state`; those remain deterministic projections. `plan_state` is introduced
+through E3 intervals, not inferred into E2 Product rows.
+
+`product_profile_versions` stores tenant/product identity, `business_version`,
+name, brand, optional original form, management unit, source,
+`history_completeness`, the source row's `updated_at`, and an effective interval.
+Dose, meal, schedule, restock-threshold, and expiry-threshold fields stay in the
+legacy compatibility model until their E3/E5/E6 owners exist. This prevents E2
+from inventing a second plan or risk configuration.
+
+`ingredient_profile_versions` stores tenant/product identity,
+`business_version`, serving quantity/unit, serving-relation state, profile
+status, change kind, history completeness, and an effective interval.
+`ingredient_profile_items` retains stable order, the compatibility ingredient
+row ID, raw key/name/amount/unit, and nullable translation, form, `%DV`,
+definition, and normalization provenance. `ingredient_definition_id` has no E2
+foreign key because the controlled reference dictionary is an R2 object; E2
+never populates it from a legacy string key. Mapping state uses the PRD values
+`exact`, `alias_matched`, `user_confirmed`, `ambiguous`, and `unmapped`.
+
+All three version/item tables use tenant-safe composite foreign keys. Per
+product, business versions are unique and only one interval may remain open.
+Per-product advisory locks plus overlap triggers serialize interval changes
+without requiring a database extension. Version bodies and items are immutable;
+an activated version may only be closed once by setting `effective_to`, and no
+item may be appended after its IngredientProfile is activated. Direct history
+deletion is rejected while parent Product/User/Workspace deletion remains able
+to cascade through the version rows.
+
+`product_media_links.purpose` is `front`, `facts`, or `supporting`; links retain
+stable order and an active interval, and both Product and File must match the
+same tenant. E2 creates the empty table but does not invent links for legacy
+recognition files. `product_deletion_jobs` uses states
+`pending/running/failed/succeeded` and phases
+`mark_deleting/delete_objects/delete_business_data/finalize`; one retryable job
+may be active per Product. The deletion service remains a later slice.
+
+### 5.2 E2 legacy snapshot and compatibility boundary
+
+`r1_backfill_product_profiles_batch(size)` is the resumable E2 catch-up
+operation. `r1_product_profile_backfill_state` retains a cycle ID, ordered
+Product cursor, processed count, start/completion timestamps, and running/idle
+state. Each call locks one catch-up cycle and commits at most the requested
+batch; a completed cycle can be restarted to discover writes made by an N-1
+server. `r1_backfill_product_profiles()` is the compatibility wrapper that runs
+one complete cycle and is used for the small migration-time snapshot.
+
+For each legacy supplement missing target pointers, catch-up creates
+Product/Profile v1, creates a conservative `partial + legacy_import`
+IngredientProfile even when the source has zero ingredients, copies every raw
+ingredient row in stable `created_at,id` order, fills a missing catalog state,
+and binds unbound existing batches to that ingredient version. For a Product
+whose pointer already exists, catch-up compares name/brand/unit, serving
+quantity/unit, and the complete ordered raw ingredient fingerprint, including
+legacy row IDs. A real legacy drift closes the current interval and appends the
+next legacy snapshot; an unchanged row creates nothing. This also handles an
+N-1 writer that deletes and recreates identical ingredient values under new row
+IDs.
+
+The same operation registers newly discovered OTC/prescription rows without
+reopening a resolved quarantine. It never overwrites an existing target catalog
+state such as `deleting` or `deleted`. Repeated complete cycles add no duplicate
+versions or items.
+
+The mapping intentionally never emits `confirmed_empty`: that state requires an
+explicit user confirmation which legacy rows cannot prove. Serving units use
+the management unit with `legacy_assumed_same_unit`; normalization fields remain
+empty/unmapped. OTC/prescription rows receive no target profile, pointer, catalog
+state, or batch binding and remain absent from ordinary service paths.
+
+During E2, legacy product columns and `product_ingredients` remain the API read
+authority. Current service writes create or append target versions in the same
+transaction and new batches bind the current ingredient version. A product-only
+change appends only ProductProfile; an ingredient/serving change appends only
+IngredientProfile and preserves earlier versions and batch bindings. Target
+reads do not become authoritative until C1 shadow comparison is accepted.
+
+Migration Down is valid only before non-legacy target facts exist. It refuses
+to run once service-created profiles, later business versions, media links,
+deletion jobs, aggregate revisions, or target-owned catalog states are present;
+after that boundary recovery is forward-fix only.
 
 ## 6. Capture and evidence — later expand group
 

@@ -144,6 +144,38 @@ func scanActor(row pgx.Row) (Actor, error) {
 	return actor, err
 }
 
+func initializeWorkspaceTimezone(ctx context.Context, tx pgx.Tx, userID, workspaceID string, now time.Time) error {
+	timezoneVersionID, err := newUUID()
+	if err != nil {
+		return err
+	}
+	result, err := tx.Exec(ctx, `
+		INSERT INTO workspace_timezone_versions (
+			id,user_id,workspace_id,business_version,iana_timezone,
+			confirmation_state,source,effective_from,created_at
+		)
+		SELECT $1,$2,w.id,1,'Etc/UTC','needs_confirmation','legacy_unspecified',$4,$4
+		FROM workspaces w
+		WHERE w.id=$3 AND w.owner_user_id=$2`, timezoneVersionID, userID, workspaceID, now)
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() != 1 {
+		return fmt.Errorf("workspace timezone owner mismatch")
+	}
+	result, err = tx.Exec(ctx, `
+		UPDATE workspaces
+		SET current_timezone_version_id=$1
+		WHERE id=$2 AND owner_user_id=$3 AND current_timezone_version_id IS NULL`, timezoneVersionID, workspaceID, userID)
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() != 1 {
+		return fmt.Errorf("workspace timezone pointer owner mismatch")
+	}
+	return nil
+}
+
 func (service *Service) createDemoSession(ctx context.Context) (SessionResult, error) {
 	now := service.now()
 	expires := now.Add(service.cfg.DemoTTL)
@@ -173,6 +205,9 @@ func (service *Service) createDemoSession(ctx context.Context) (SessionResult, e
 		return SessionResult{}, err
 	}
 	if _, err = tx.Exec(ctx, `INSERT INTO workspaces (id,owner_user_id,kind,name,last_activity_at,expires_at,created_at) VALUES ($1,$2,'demo','演示空间',$3,$4,$3)`, workspaceID, userID, now, expires); err != nil {
+		return SessionResult{}, err
+	}
+	if err = initializeWorkspaceTimezone(ctx, tx, userID, workspaceID, now); err != nil {
 		return SessionResult{}, err
 	}
 	if _, err = tx.Exec(ctx, `INSERT INTO workspace_members (workspace_id,user_id,role,created_at) VALUES ($1,$2,'owner',$3)`, workspaceID, userID, now); err != nil {
@@ -330,6 +365,9 @@ func (service *Service) VerifyLoginCode(ctx context.Context, email, code, invita
 			return SessionResult{}, err
 		}
 		if _, err = tx.Exec(ctx, `INSERT INTO workspaces (id,owner_user_id,kind,name,last_activity_at,created_at) VALUES ($1,$2,'registered','我的空间',$3,$3)`, workspaceID, userID, now); err != nil {
+			return SessionResult{}, err
+		}
+		if err = initializeWorkspaceTimezone(ctx, tx, userID, workspaceID, now); err != nil {
 			return SessionResult{}, err
 		}
 		if _, err = tx.Exec(ctx, `INSERT INTO workspace_members (workspace_id,user_id,role,created_at) VALUES ($1,$2,'owner',$3)`, workspaceID, userID, now); err != nil {
@@ -683,6 +721,9 @@ func (service *Service) BootstrapAdmin(ctx context.Context, email string) error 
 		return err
 	}
 	if _, err = tx.Exec(ctx, `INSERT INTO workspaces (id,owner_user_id,kind,name,last_activity_at,created_at) VALUES ($1,$2,'registered','我的空间',$3,$3)`, workspaceID, userID, now); err != nil {
+		return err
+	}
+	if err = initializeWorkspaceTimezone(ctx, tx, userID, workspaceID, now); err != nil {
 		return err
 	}
 	if _, err = tx.Exec(ctx, `INSERT INTO workspace_members (workspace_id,user_id,role,created_at) VALUES ($1,$2,'owner',$3)`, workspaceID, userID, now); err != nil {

@@ -161,6 +161,18 @@ func TestRecognitionPersistenceWorkerConfirmationAndIsolation(t *testing.T) {
 	if err != nil || same.ID != product.ID {
 		t.Fatal("confirmation must be idempotent")
 	}
+	if err = pool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM products p
+		JOIN product_profile_versions ppv ON ppv.id=p.current_product_profile_version_id
+		JOIN ingredient_profile_versions ipv ON ipv.id=p.current_ingredient_profile_version_id
+		WHERE p.id=$1
+		  AND p.source_recognition_set_id=$2
+		  AND ppv.source='capture_confirmed'
+		  AND ppv.business_version=1
+		  AND ipv.business_version=1`, product.ID, set.ID).Scan(&productCount); err != nil || productCount != 1 {
+		t.Fatalf("recognition confirmation did not create exactly one target profile set: count=%d err=%v", productCount, err)
+	}
 	if _, err = service.catalog.GetProduct(ctx, catalog.Scope(other), product.ID); !errors.Is(err, catalog.ErrNotFound) {
 		t.Fatal("confirmed product leaked across tenant")
 	}

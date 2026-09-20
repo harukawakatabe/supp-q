@@ -230,8 +230,8 @@ func normalizeCreate(input CreateProductInput, now time.Time) (CreateProductInpu
 	if input.ProductType == "" {
 		input.ProductType = "supplement"
 	}
-	if input.ProductType != "supplement" && input.ProductType != "otc" && input.ProductType != "prescription" {
-		return input, core.Schedule{}, NewError("invalid_product", "产品类型无效。")
+	if input.ProductType != "supplement" {
+		return input, core.Schedule{}, NewError("invalid_product", "当前只支持补剂产品。")
 	}
 	if input.DoseQuantity <= 0 {
 		input.DoseQuantity = 1
@@ -371,7 +371,11 @@ func (service *Service) createProductTx(ctx context.Context, tx pgx.Tx, scope Sc
 	if input.SourceRecognitionSetID != "" {
 		sourceSet = input.SourceRecognitionSetID
 	}
-	if _, err = tx.Exec(ctx, `INSERT INTO products (id,user_id,workspace_id,name,brand,product_type,status,unit,dose_quantity,dose_times_per_day,ingredient_serving_quantity,with_food,restock_threshold_days,expiry_reminder_days,source_recognition_set_id,created_at,updated_at) VALUES ($1,$2,$3,$4,$5,$6,'active',$7,$8,$9,$10,$11,$12,$13,$14,$15,$15)`, productID, scope.UserID, scope.WorkspaceID, input.Name, input.Brand, input.ProductType, input.Unit, dose.DatabaseString(), input.DoseTimesPerDay, serving.DatabaseString(), input.WithFood, input.RestockThresholdDays, input.ExpiryReminderDays, sourceSet, now); err != nil {
+	if _, err = tx.Exec(ctx, `INSERT INTO products (id,user_id,workspace_id,name,brand,product_type,status,unit,dose_quantity,dose_times_per_day,ingredient_serving_quantity,with_food,restock_threshold_days,expiry_reminder_days,source_recognition_set_id,catalog_state,aggregate_version,created_at,updated_at) VALUES ($1,$2,$3,$4,$5,$6,'active',$7,$8,$9,$10,$11,$12,$13,$14,'in_cabinet',1,$15,$15)`, productID, scope.UserID, scope.WorkspaceID, input.Name, input.Brand, input.ProductType, input.Unit, dose.DatabaseString(), input.DoseTimesPerDay, serving.DatabaseString(), input.WithFood, input.RestockThresholdDays, input.ExpiryReminderDays, sourceSet, now); err != nil {
+		return "", err
+	}
+	ingredientProfileID, err := createInitialProfileVersions(ctx, tx, scope, productID, input, serving, now)
+	if err != nil {
 		return "", err
 	}
 	weekdays := make([]int16, len(schedule.Weekdays))
@@ -393,17 +397,25 @@ func (service *Service) createProductTx(ctx context.Context, tx pgx.Tx, scope Sc
 		parsed, _ := core.ParseDate(input.OpeningBatch.ExpiryDate)
 		expiry = parsed
 	}
-	if _, err = tx.Exec(ctx, `INSERT INTO inventory_batches (id,user_id,workspace_id,product_id,initial_quantity,current_quantity,expiry_date,price_cny,created_at) VALUES ($1,$2,$3,$4,$5,$5,$6,$7,$8)`, batchID, scope.UserID, scope.WorkspaceID, productID, opening.DatabaseString(), expiry, input.OpeningBatch.PriceCNY, now); err != nil {
+	if _, err = tx.Exec(ctx, `INSERT INTO inventory_batches (id,user_id,workspace_id,product_id,initial_quantity,current_quantity,expiry_date,price_cny,ingredient_profile_version_id,created_at) VALUES ($1,$2,$3,$4,$5,$5,$6,$7,$8,$9)`, batchID, scope.UserID, scope.WorkspaceID, productID, opening.DatabaseString(), expiry, input.OpeningBatch.PriceCNY, ingredientProfileID, now); err != nil {
 		return "", err
 	}
 	if _, err = tx.Exec(ctx, `INSERT INTO inventory_events (id,user_id,workspace_id,product_id,batch_id,kind,quantity_delta,created_at) VALUES ($1,$2,$3,$4,$5,'opening',$6,$7)`, eventID, scope.UserID, scope.WorkspaceID, productID, batchID, opening.DatabaseString(), now); err != nil {
 		return "", err
 	}
-	for _, ingredient := range input.Ingredients {
-		id, createErr := newUUID()
-		if createErr != nil {
-			return "", createErr
-		}
+	return productID, nil
+}
+
+type normalizedIngredient struct {
+	key    string
+	name   string
+	amount core.Quantity
+	unit   string
+}
+
+func normalizeIngredients(inputs []IngredientInput) ([]normalizedIngredient, error) {
+	items := make([]normalizedIngredient, 0, len(inputs))
+	for _, ingredient := range inputs {
 		key := normalizeIngredientKey(ingredient.Key, ingredient.Name)
 		name := strings.TrimSpace(ingredient.Name)
 		if name == "" {
@@ -413,15 +425,79 @@ func (service *Service) createProductTx(ctx context.Context, tx pgx.Tx, scope Sc
 		if unit == "" {
 			unit = "mg"
 		}
-		amount, parseErr := core.QuantityFromFloat(ingredient.Amount)
-		if parseErr != nil {
-			return "", NewError("invalid_ingredient", "成分剂量无效。")
+		amount, err := core.QuantityFromFloat(ingredient.Amount)
+		if err != nil {
+			return nil, NewError("invalid_ingredient", "成分剂量无效。")
 		}
-		if _, err = tx.Exec(ctx, `INSERT INTO product_ingredients (id,user_id,workspace_id,product_id,ingredient_key,name,amount,unit,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`, id, scope.UserID, scope.WorkspaceID, productID, key, name, amount.DatabaseString(), unit, now); err != nil {
+		items = append(items, normalizedIngredient{key: key, name: name, amount: amount, unit: unit})
+	}
+	return items, nil
+}
+
+func createInitialProfileVersions(ctx context.Context, tx pgx.Tx, scope Scope, productID string, input CreateProductInput, serving core.Quantity, now time.Time) (string, error) {
+	productProfileID, err := newUUID()
+	if err != nil {
+		return "", err
+	}
+	ingredientProfileID, err := newUUID()
+	if err != nil {
+		return "", err
+	}
+	source := "manual"
+	if input.SourceRecognitionSetID != "" {
+		source = "capture_confirmed"
+	}
+	if _, err = tx.Exec(ctx, `
+		INSERT INTO product_profile_versions (
+			id,user_id,workspace_id,product_id,business_version,name,brand,product_form,
+			management_unit,source,history_completeness,source_updated_at,effective_from,created_at
+		) VALUES ($1,$2,$3,$4,1,$5,$6,'',$7,$8,'complete',$9,$9,$9)`,
+		productProfileID, scope.UserID, scope.WorkspaceID, productID, input.Name, input.Brand, input.Unit, source, now); err != nil {
+		return "", err
+	}
+	if _, err = tx.Exec(ctx, `
+		INSERT INTO ingredient_profile_versions (
+			id,user_id,workspace_id,product_id,business_version,serving_quantity,serving_unit,
+			serving_relation_state,profile_status,change_kind,history_completeness,
+			source_updated_at,effective_from,created_at
+		) VALUES ($1,$2,$3,$4,1,$5,$6,'legacy_assumed_same_unit','partial','initial','complete',$7,$7,$7)`,
+		ingredientProfileID, scope.UserID, scope.WorkspaceID, productID, serving.DatabaseString(), input.Unit, now); err != nil {
+		return "", err
+	}
+	items, err := normalizeIngredients(input.Ingredients)
+	if err != nil {
+		return "", err
+	}
+	for index, ingredient := range items {
+		legacyID, createErr := newUUID()
+		if createErr != nil {
+			return "", createErr
+		}
+		itemID, createErr := newUUID()
+		if createErr != nil {
+			return "", createErr
+		}
+		if _, err = tx.Exec(ctx, `INSERT INTO product_ingredients (id,user_id,workspace_id,product_id,ingredient_key,name,amount,unit,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`, legacyID, scope.UserID, scope.WorkspaceID, productID, ingredient.key, ingredient.name, ingredient.amount.DatabaseString(), ingredient.unit, now); err != nil {
+			return "", err
+		}
+		if _, err = tx.Exec(ctx, `
+			INSERT INTO ingredient_profile_items (
+				id,user_id,workspace_id,product_id,ingredient_profile_version_id,item_order,
+				legacy_ingredient_id,original_key,original_name,label_amount,label_unit,mapping_status,created_at
+			) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'unmapped',$12)`,
+			itemID, scope.UserID, scope.WorkspaceID, productID, ingredientProfileID, index,
+			legacyID, ingredient.key, ingredient.name, ingredient.amount.DatabaseString(), ingredient.unit, now); err != nil {
 			return "", err
 		}
 	}
-	return productID, nil
+	if _, err = tx.Exec(ctx, `
+		UPDATE products
+		SET current_product_profile_version_id=$1,current_ingredient_profile_version_id=$2
+		WHERE id=$3 AND user_id=$4 AND workspace_id=$5`,
+		productProfileID, ingredientProfileID, productID, scope.UserID, scope.WorkspaceID); err != nil {
+		return "", err
+	}
+	return ingredientProfileID, nil
 }
 
 func normalizeIngredientKey(key, name string) string {
@@ -447,7 +523,7 @@ func (service *Service) GetProduct(ctx context.Context, scope Scope, id string) 
 
 func (service *Service) GetProductByRecognitionSet(ctx context.Context, scope Scope, setID string) (Product, error) {
 	var id string
-	err := service.pool.QueryRow(ctx, `SELECT id FROM products WHERE source_recognition_set_id=$1 AND user_id=$2 AND workspace_id=$3`, setID, scope.UserID, scope.WorkspaceID).Scan(&id)
+	err := service.pool.QueryRow(ctx, `SELECT id FROM products WHERE source_recognition_set_id=$1 AND user_id=$2 AND workspace_id=$3 AND product_type='supplement'`, setID, scope.UserID, scope.WorkspaceID).Scan(&id)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Product{}, ErrNotFound
 	}
@@ -457,7 +533,7 @@ func (service *Service) GetProductByRecognitionSet(ctx context.Context, scope Sc
 	return service.GetProduct(ctx, scope, id)
 }
 func (service *Service) ListProducts(ctx context.Context, scope Scope) ([]Product, error) {
-	rows, err := service.pool.Query(ctx, `SELECT id FROM products WHERE user_id=$1 AND workspace_id=$2 AND status<>'archived' ORDER BY created_at DESC LIMIT 100`, scope.UserID, scope.WorkspaceID)
+	rows, err := service.pool.Query(ctx, `SELECT id FROM products WHERE user_id=$1 AND workspace_id=$2 AND product_type='supplement' AND status<>'archived' ORDER BY created_at DESC LIMIT 100`, scope.UserID, scope.WorkspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -517,6 +593,160 @@ func normalizeUpdate(input UpdateProductInput, now time.Time) (UpdateProductInpu
 	return input, schedule, effectiveDate, nil
 }
 
+type currentProfileState struct {
+	productProfileID          string
+	productBusinessVersion    int
+	productEffectiveFrom      time.Time
+	name                      string
+	brand                     string
+	unit                      string
+	ingredientProfileID       string
+	ingredientBusinessVersion int
+	ingredientEffectiveFrom   time.Time
+	serving                   core.Quantity
+	servingUnit               string
+	ingredients               []normalizedIngredient
+}
+
+func loadCurrentProfileState(ctx context.Context, tx pgx.Tx, scope Scope, productID string) (currentProfileState, error) {
+	var state currentProfileState
+	var servingText string
+	err := tx.QueryRow(ctx, `
+		SELECT ppv.id,ppv.business_version,ppv.effective_from,ppv.name,ppv.brand,ppv.management_unit,
+		       ipv.id,ipv.business_version,ipv.effective_from,ipv.serving_quantity::text,ipv.serving_unit
+		FROM products p
+		JOIN product_profile_versions ppv
+		  ON ppv.id=p.current_product_profile_version_id
+		 AND ppv.product_id=p.id AND ppv.user_id=p.user_id AND ppv.workspace_id=p.workspace_id
+		JOIN ingredient_profile_versions ipv
+		  ON ipv.id=p.current_ingredient_profile_version_id
+		 AND ipv.product_id=p.id AND ipv.user_id=p.user_id AND ipv.workspace_id=p.workspace_id
+		WHERE p.id=$1 AND p.user_id=$2 AND p.workspace_id=$3 AND p.product_type='supplement'`,
+		productID, scope.UserID, scope.WorkspaceID).Scan(
+		&state.productProfileID, &state.productBusinessVersion, &state.productEffectiveFrom, &state.name, &state.brand, &state.unit,
+		&state.ingredientProfileID, &state.ingredientBusinessVersion, &state.ingredientEffectiveFrom, &servingText, &state.servingUnit)
+	if err != nil {
+		return state, err
+	}
+	state.serving, err = core.ParseQuantity(servingText)
+	if err != nil {
+		return state, err
+	}
+	rows, err := tx.Query(ctx, `
+		SELECT original_key,original_name,label_amount::text,label_unit
+		FROM ingredient_profile_items
+		WHERE ingredient_profile_version_id=$1 AND product_id=$2 AND user_id=$3 AND workspace_id=$4
+		ORDER BY item_order`, state.ingredientProfileID, productID, scope.UserID, scope.WorkspaceID)
+	if err != nil {
+		return state, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var item normalizedIngredient
+		var amountText string
+		if err = rows.Scan(&item.key, &item.name, &amountText, &item.unit); err != nil {
+			return state, err
+		}
+		item.amount, err = core.ParseQuantity(amountText)
+		if err != nil {
+			return state, err
+		}
+		state.ingredients = append(state.ingredients, item)
+	}
+	return state, rows.Err()
+}
+
+func ingredientsEqual(left, right []normalizedIngredient) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index].key != right[index].key || left[index].name != right[index].name ||
+			left[index].amount != right[index].amount || left[index].unit != right[index].unit {
+			return false
+		}
+	}
+	return true
+}
+
+func appendProductProfileVersion(ctx context.Context, tx pgx.Tx, scope Scope, productID string, current currentProfileState, input UpdateProductInput, now time.Time) error {
+	if _, err := tx.Exec(ctx, `
+		UPDATE product_profile_versions SET effective_to=$1
+		WHERE id=$2 AND product_id=$3 AND user_id=$4 AND workspace_id=$5 AND effective_to IS NULL`,
+		now, current.productProfileID, productID, scope.UserID, scope.WorkspaceID); err != nil {
+		return err
+	}
+	profileID, err := newUUID()
+	if err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, `
+		INSERT INTO product_profile_versions (
+			id,user_id,workspace_id,product_id,business_version,name,brand,product_form,
+			management_unit,source,history_completeness,source_updated_at,effective_from,created_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,'',$8,'manual','complete',$9,$9,$9)`,
+		profileID, scope.UserID, scope.WorkspaceID, productID, current.productBusinessVersion+1,
+		input.Name, input.Brand, input.Unit, now); err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx, `
+		UPDATE products SET current_product_profile_version_id=$1
+		WHERE id=$2 AND user_id=$3 AND workspace_id=$4`, profileID, productID, scope.UserID, scope.WorkspaceID)
+	return err
+}
+
+func appendIngredientProfileVersion(ctx context.Context, tx pgx.Tx, scope Scope, productID string, current currentProfileState, input UpdateProductInput, serving core.Quantity, ingredients []normalizedIngredient, now time.Time) error {
+	if _, err := tx.Exec(ctx, `
+		UPDATE ingredient_profile_versions SET effective_to=$1
+		WHERE id=$2 AND product_id=$3 AND user_id=$4 AND workspace_id=$5 AND effective_to IS NULL`,
+		now, current.ingredientProfileID, productID, scope.UserID, scope.WorkspaceID); err != nil {
+		return err
+	}
+	profileID, err := newUUID()
+	if err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, `
+		INSERT INTO ingredient_profile_versions (
+			id,user_id,workspace_id,product_id,business_version,serving_quantity,serving_unit,
+			serving_relation_state,profile_status,change_kind,history_completeness,
+			source_updated_at,effective_from,created_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,'legacy_assumed_same_unit','partial','new_formula','complete',$8,$8,$8)`,
+		profileID, scope.UserID, scope.WorkspaceID, productID, current.ingredientBusinessVersion+1,
+		serving.DatabaseString(), input.Unit, now); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, `DELETE FROM product_ingredients WHERE product_id=$1 AND user_id=$2 AND workspace_id=$3`, productID, scope.UserID, scope.WorkspaceID); err != nil {
+		return err
+	}
+	for index, ingredient := range ingredients {
+		legacyID, createErr := newUUID()
+		if createErr != nil {
+			return createErr
+		}
+		itemID, createErr := newUUID()
+		if createErr != nil {
+			return createErr
+		}
+		if _, err = tx.Exec(ctx, `INSERT INTO product_ingredients (id,user_id,workspace_id,product_id,ingredient_key,name,amount,unit,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`, legacyID, scope.UserID, scope.WorkspaceID, productID, ingredient.key, ingredient.name, ingredient.amount.DatabaseString(), ingredient.unit, now); err != nil {
+			return err
+		}
+		if _, err = tx.Exec(ctx, `
+			INSERT INTO ingredient_profile_items (
+				id,user_id,workspace_id,product_id,ingredient_profile_version_id,item_order,
+				legacy_ingredient_id,original_key,original_name,label_amount,label_unit,mapping_status,created_at
+			) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'unmapped',$12)`,
+			itemID, scope.UserID, scope.WorkspaceID, productID, profileID, index,
+			legacyID, ingredient.key, ingredient.name, ingredient.amount.DatabaseString(), ingredient.unit, now); err != nil {
+			return err
+		}
+	}
+	_, err = tx.Exec(ctx, `
+		UPDATE products SET current_ingredient_profile_version_id=$1
+		WHERE id=$2 AND user_id=$3 AND workspace_id=$4`, profileID, productID, scope.UserID, scope.WorkspaceID)
+	return err
+}
+
 // UpdateProduct changes the current product and schedule from EffectiveDate
 // forward. Day-cycle history is upserted by effective date so past calculations
 // remain stable when the user corrects the current anchor.
@@ -538,10 +768,27 @@ func (service *Service) UpdateProduct(ctx context.Context, scope Scope, productI
 	}
 	defer tx.Rollback(ctx)
 	var lockedID, totalText string
-	if err = tx.QueryRow(ctx, `SELECT id FROM products WHERE id=$1 AND user_id=$2 AND workspace_id=$3 AND status<>'archived' FOR UPDATE`, productID, scope.UserID, scope.WorkspaceID).Scan(&lockedID); errors.Is(err, pgx.ErrNoRows) {
+	if err = tx.QueryRow(ctx, `SELECT id FROM products WHERE id=$1 AND user_id=$2 AND workspace_id=$3 AND product_type='supplement' AND status<>'archived' FOR UPDATE`, productID, scope.UserID, scope.WorkspaceID).Scan(&lockedID); errors.Is(err, pgx.ErrNoRows) {
 		return Product{}, ErrNotFound
 	} else if err != nil {
 		return Product{}, err
+	}
+	currentProfiles, err := loadCurrentProfileState(ctx, tx, scope, productID)
+	if err != nil {
+		return Product{}, err
+	}
+	normalizedIngredients, err := normalizeIngredients(normalized.Ingredients)
+	if err != nil {
+		return Product{}, err
+	}
+	productProfileChanged := currentProfiles.name != normalized.Name || currentProfiles.brand != normalized.Brand || currentProfiles.unit != normalized.Unit
+	ingredientProfileChanged := currentProfiles.serving != serving || currentProfiles.servingUnit != normalized.Unit || !ingredientsEqual(currentProfiles.ingredients, normalizedIngredients)
+	profileEffectiveAt := now
+	if !profileEffectiveAt.After(currentProfiles.productEffectiveFrom) {
+		profileEffectiveAt = currentProfiles.productEffectiveFrom.Add(time.Microsecond)
+	}
+	if !profileEffectiveAt.After(currentProfiles.ingredientEffectiveFrom) {
+		profileEffectiveAt = currentProfiles.ingredientEffectiveFrom.Add(time.Microsecond)
 	}
 	if err = tx.QueryRow(ctx, `SELECT COALESCE(sum(current_quantity),0)::text FROM inventory_batches WHERE product_id=$1 AND user_id=$2 AND workspace_id=$3`, productID, scope.UserID, scope.WorkspaceID).Scan(&totalText); err != nil {
 		return Product{}, err
@@ -572,27 +819,18 @@ func (service *Service) UpdateProduct(ctx context.Context, scope Scope, productI
 	if _, err = tx.Exec(ctx, `INSERT INTO day_cycle_versions (id,user_id,workspace_id,product_id,effective_date,enabled,cycle_days,take_days,anchor_date,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT (product_id,effective_date) DO UPDATE SET enabled=EXCLUDED.enabled,cycle_days=EXCLUDED.cycle_days,take_days=EXCLUDED.take_days,anchor_date=EXCLUDED.anchor_date,created_at=EXCLUDED.created_at`, versionID, scope.UserID, scope.WorkspaceID, productID, effectiveDate, schedule.DayCycle.Enabled, schedule.DayCycle.CycleDays, schedule.DayCycle.TakeDays, schedule.DayCycle.AnchorDate, now); err != nil {
 		return Product{}, err
 	}
-	if _, err = tx.Exec(ctx, `DELETE FROM product_ingredients WHERE product_id=$1 AND user_id=$2 AND workspace_id=$3`, productID, scope.UserID, scope.WorkspaceID); err != nil {
-		return Product{}, err
+	if productProfileChanged {
+		if err = appendProductProfileVersion(ctx, tx, scope, productID, currentProfiles, normalized, profileEffectiveAt); err != nil {
+			return Product{}, err
+		}
 	}
-	for _, ingredient := range normalized.Ingredients {
-		id, createErr := newUUID()
-		if createErr != nil {
-			return Product{}, createErr
+	if ingredientProfileChanged {
+		if err = appendIngredientProfileVersion(ctx, tx, scope, productID, currentProfiles, normalized, serving, normalizedIngredients, profileEffectiveAt); err != nil {
+			return Product{}, err
 		}
-		key := normalizeIngredientKey(ingredient.Key, ingredient.Name)
-		name, unit := strings.TrimSpace(ingredient.Name), strings.TrimSpace(ingredient.Unit)
-		if name == "" {
-			name = key
-		}
-		if unit == "" {
-			unit = "mg"
-		}
-		amount, parseErr := core.QuantityFromFloat(ingredient.Amount)
-		if parseErr != nil {
-			return Product{}, NewError("invalid_ingredient", "成分剂量无效。")
-		}
-		if _, err = tx.Exec(ctx, `INSERT INTO product_ingredients (id,user_id,workspace_id,product_id,ingredient_key,name,amount,unit,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`, id, scope.UserID, scope.WorkspaceID, productID, key, name, amount.DatabaseString(), unit, now); err != nil {
+	}
+	if productProfileChanged || ingredientProfileChanged {
+		if _, err = tx.Exec(ctx, `UPDATE products SET aggregate_version=aggregate_version+1 WHERE id=$1 AND user_id=$2 AND workspace_id=$3`, productID, scope.UserID, scope.WorkspaceID); err != nil {
 			return Product{}, err
 		}
 	}
@@ -608,7 +846,7 @@ func loadProduct(ctx context.Context, db dbtx, scope Scope, id string, now time.
 	err := db.QueryRow(ctx, `
 		SELECT id,name,brand,product_type,status,unit,dose_quantity::text,dose_times_per_day,
 		       ingredient_serving_quantity::text,with_food,restock_threshold_days,expiry_reminder_days,created_at,updated_at
-		FROM products WHERE id=$1 AND user_id=$2 AND workspace_id=$3 AND status<>'archived'`, id, scope.UserID, scope.WorkspaceID).
+		FROM products WHERE id=$1 AND user_id=$2 AND workspace_id=$3 AND product_type='supplement' AND status<>'archived'`, id, scope.UserID, scope.WorkspaceID).
 		Scan(&product.ID, &product.Name, &product.Brand, &product.ProductType, &product.Status, &product.Unit, &doseText,
 			&product.DoseTimesPerDay, &servingText, &product.WithFood, &product.RestockThresholdDays,
 			&product.ExpiryReminderDays, &product.CreatedAt, &product.UpdatedAt)
@@ -785,8 +1023,8 @@ func (service *Service) AddBatch(ctx context.Context, scope Scope, productID str
 		return Product{}, err
 	}
 	defer tx.Rollback(ctx)
-	var lockedID string
-	if err = tx.QueryRow(ctx, `SELECT id FROM products WHERE id=$1 AND user_id=$2 AND workspace_id=$3 AND status<>'archived' FOR UPDATE`, productID, scope.UserID, scope.WorkspaceID).Scan(&lockedID); errors.Is(err, pgx.ErrNoRows) {
+	var lockedID, ingredientProfileID string
+	if err = tx.QueryRow(ctx, `SELECT id,current_ingredient_profile_version_id FROM products WHERE id=$1 AND user_id=$2 AND workspace_id=$3 AND product_type='supplement' AND status<>'archived' FOR UPDATE`, productID, scope.UserID, scope.WorkspaceID).Scan(&lockedID, &ingredientProfileID); errors.Is(err, pgx.ErrNoRows) {
 		return Product{}, ErrNotFound
 	} else if err != nil {
 		return Product{}, err
@@ -800,7 +1038,7 @@ func (service *Service) AddBatch(ctx context.Context, scope Scope, productID str
 		return Product{}, err
 	}
 	now := service.now()
-	if _, err = tx.Exec(ctx, `INSERT INTO inventory_batches (id,user_id,workspace_id,product_id,initial_quantity,current_quantity,expiry_date,price_cny,created_at) VALUES ($1,$2,$3,$4,$5,$5,$6,$7,$8)`, batchID, scope.UserID, scope.WorkspaceID, productID, quantity.DatabaseString(), expiry, input.PriceCNY, now); err != nil {
+	if _, err = tx.Exec(ctx, `INSERT INTO inventory_batches (id,user_id,workspace_id,product_id,initial_quantity,current_quantity,expiry_date,price_cny,ingredient_profile_version_id,created_at) VALUES ($1,$2,$3,$4,$5,$5,$6,$7,$8,$9)`, batchID, scope.UserID, scope.WorkspaceID, productID, quantity.DatabaseString(), expiry, input.PriceCNY, ingredientProfileID, now); err != nil {
 		return Product{}, err
 	}
 	if _, err = tx.Exec(ctx, `INSERT INTO inventory_events (id,user_id,workspace_id,product_id,batch_id,kind,quantity_delta,created_at) VALUES ($1,$2,$3,$4,$5,'restock',$6,$7)`, eventID, scope.UserID, scope.WorkspaceID, productID, batchID, quantity.DatabaseString(), now); err != nil {
@@ -892,7 +1130,7 @@ func (service *Service) CreateIntake(ctx context.Context, scope Scope, input Cre
 
 func (service *Service) createIntakeTx(ctx context.Context, tx pgx.Tx, scope Scope, input CreateIntakeInput, date time.Time, intakeTime any, quantity core.Quantity, idempotencyKey string, now time.Time) (string, error) {
 	var productID string
-	if err := tx.QueryRow(ctx, `SELECT id FROM products WHERE id=$1 AND user_id=$2 AND workspace_id=$3 AND status<>'archived' FOR UPDATE`, input.ProductID, scope.UserID, scope.WorkspaceID).Scan(&productID); errors.Is(err, pgx.ErrNoRows) {
+	if err := tx.QueryRow(ctx, `SELECT id FROM products WHERE id=$1 AND user_id=$2 AND workspace_id=$3 AND product_type='supplement' AND status<>'archived' FOR UPDATE`, input.ProductID, scope.UserID, scope.WorkspaceID).Scan(&productID); errors.Is(err, pgx.ErrNoRows) {
 		return "", ErrNotFound
 	} else if err != nil {
 		return "", err
@@ -1034,7 +1272,7 @@ func (service *Service) ListIntakes(ctx context.Context, scope Scope, fromKey, t
 	if from.After(to) || to.Sub(from) > 366*24*time.Hour {
 		return nil, NewError("invalid_date", "记录查询范围必须按时间顺序且不能超过 366 天。")
 	}
-	rows, err := service.pool.Query(ctx, `SELECT i.id,i.product_id,i.intake_date,COALESCE(to_char(i.intake_time,'HH24:MI'),''),i.quantity::text,i.source,i.status,i.note,i.created_at,i.revoked_at,p.name,p.unit FROM intake_records i JOIN products p ON p.id=i.product_id AND p.user_id=i.user_id AND p.workspace_id=i.workspace_id WHERE i.user_id=$1 AND i.workspace_id=$2 AND i.intake_date BETWEEN $3 AND $4 ORDER BY i.intake_date DESC,i.created_at DESC LIMIT 1000`, scope.UserID, scope.WorkspaceID, from, to)
+	rows, err := service.pool.Query(ctx, `SELECT i.id,i.product_id,i.intake_date,COALESCE(to_char(i.intake_time,'HH24:MI'),''),i.quantity::text,i.source,i.status,i.note,i.created_at,i.revoked_at,p.name,p.unit FROM intake_records i JOIN products p ON p.id=i.product_id AND p.user_id=i.user_id AND p.workspace_id=i.workspace_id AND p.product_type='supplement' WHERE i.user_id=$1 AND i.workspace_id=$2 AND i.intake_date BETWEEN $3 AND $4 ORDER BY i.intake_date DESC,i.created_at DESC LIMIT 1000`, scope.UserID, scope.WorkspaceID, from, to)
 	if err != nil {
 		return nil, err
 	}
@@ -1064,7 +1302,7 @@ func (service *Service) UndoIntake(ctx context.Context, scope Scope, id string) 
 	}
 	defer tx.Rollback(ctx)
 	var productID, status string
-	if err = tx.QueryRow(ctx, `SELECT product_id,status FROM intake_records WHERE id=$1 AND user_id=$2 AND workspace_id=$3 FOR UPDATE`, id, scope.UserID, scope.WorkspaceID).Scan(&productID, &status); errors.Is(err, pgx.ErrNoRows) {
+	if err = tx.QueryRow(ctx, `SELECT i.product_id,i.status FROM intake_records i JOIN products p ON p.id=i.product_id AND p.user_id=i.user_id AND p.workspace_id=i.workspace_id AND p.product_type='supplement' WHERE i.id=$1 AND i.user_id=$2 AND i.workspace_id=$3 FOR UPDATE OF i`, id, scope.UserID, scope.WorkspaceID).Scan(&productID, &status); errors.Is(err, pgx.ErrNoRows) {
 		return Intake{}, Product{}, ErrNotFound
 	} else if err != nil {
 		return Intake{}, Product{}, err
@@ -1236,7 +1474,7 @@ func (service *Service) EnsureDemo(ctx context.Context, scope Scope) error {
 		return err
 	}
 	var count int
-	if err = tx.QueryRow(ctx, `SELECT count(*) FROM products WHERE user_id=$1 AND workspace_id=$2`, scope.UserID, scope.WorkspaceID).Scan(&count); err != nil {
+	if err = tx.QueryRow(ctx, `SELECT count(*) FROM products WHERE user_id=$1 AND workspace_id=$2 AND product_type='supplement'`, scope.UserID, scope.WorkspaceID).Scan(&count); err != nil {
 		return err
 	}
 	if count == 0 {

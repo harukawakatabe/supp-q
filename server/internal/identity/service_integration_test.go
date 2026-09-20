@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"suppq.local/server/internal/catalog"
 	"suppq.local/server/migrations"
 )
 
@@ -65,6 +66,7 @@ func TestIdentityInvitationAndDemoLifecycle(t *testing.T) {
 	defer pool.Close()
 	sender := &recordingMailer{codes: map[string]string{}}
 	service := New(pool, sender, Config{Pepper: "integration-test-pepper-with-at-least-32-characters", SessionTTL: 30 * 24 * time.Hour, DemoTTL: 24 * time.Hour, EmailCodeTTL: 10 * time.Minute})
+	catalogService := catalog.New(pool)
 
 	demoOne, err := service.EnsureSession(ctx, "")
 	if err != nil {
@@ -77,6 +79,9 @@ func TestIdentityInvitationAndDemoLifecycle(t *testing.T) {
 	if demoOne.Actor.UserID == demoTwo.Actor.UserID || demoOne.Actor.WorkspaceID == demoTwo.Actor.WorkspaceID {
 		t.Fatal("anonymous sessions must be isolated")
 	}
+	assertWorkspaceTimezone(t, ctx, pool, demoOne.Actor)
+	assertWorkspaceTimezone(t, ctx, pool, demoTwo.Actor)
+	createCleanupProduct(t, ctx, pool, catalogService, demoOne.Actor, "expired demo cleanup supplement")
 
 	if err = service.BootstrapAdmin(ctx, "admin@example.test"); err != nil {
 		t.Fatal(err)
@@ -91,6 +96,7 @@ func TestIdentityInvitationAndDemoLifecycle(t *testing.T) {
 	if adminSession.Actor.Role != "admin" {
 		t.Fatalf("expected admin, got %q", adminSession.Actor.Role)
 	}
+	assertWorkspaceTimezone(t, ctx, pool, adminSession.Actor)
 
 	created, err := service.CreateInvitation(ctx, adminSession.Actor, CreateInvitationInput{Kind: "generic_code", MaxUses: 1, ExpiresAt: time.Now().Add(time.Hour)})
 	if err != nil {
@@ -106,6 +112,8 @@ func TestIdentityInvitationAndDemoLifecycle(t *testing.T) {
 	if memberSession.Actor.Kind != "registered" || memberSession.Actor.WorkspaceKind != "registered" {
 		t.Fatalf("unexpected registered actor: %+v", memberSession.Actor)
 	}
+	assertWorkspaceTimezone(t, ctx, pool, memberSession.Actor)
+	createCleanupProduct(t, ctx, pool, catalogService, memberSession.Actor, "registered cleanup supplement")
 	passwordSession, err := service.PasswordLogin(ctx, "person@example.test", "member-password-123", "")
 	if err != nil {
 		t.Fatal(err)
@@ -218,5 +226,72 @@ func TestIdentityInvitationAndDemoLifecycle(t *testing.T) {
 	}
 	if remaining != 1 {
 		t.Fatalf("expected only the failed concurrent claimant demo to remain, got %d", remaining)
+	}
+}
+
+func createCleanupProduct(t *testing.T, ctx context.Context, pool *pgxpool.Pool, service *catalog.Service, actor Actor, name string) {
+	t.Helper()
+	product, err := service.CreateProduct(ctx, catalog.Scope{UserID: actor.UserID, WorkspaceID: actor.WorkspaceID}, catalog.CreateProductInput{
+		Name:                      name,
+		ProductType:               "supplement",
+		Unit:                      "粒",
+		DoseQuantity:              1,
+		DoseTimesPerDay:           1,
+		IngredientServingQuantity: 1,
+		RestockThresholdDays:      7,
+		ExpiryReminderDays:        30,
+		Schedule: catalog.ScheduleInput{
+			StartDate:     time.Now().UTC().Format("2006-01-02"),
+			Weekdays:      []int{0, 1, 2, 3, 4, 5, 6},
+			ReminderTimes: []string{"09:00"},
+		},
+		OpeningBatch: catalog.BatchInput{Quantity: 1},
+	})
+	if err != nil {
+		t.Fatalf("create cleanup product for %s: %v", actor.UserID, err)
+	}
+	var completeTargetRows int
+	if err = pool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM products p
+		JOIN product_profile_versions ppv ON ppv.id=p.current_product_profile_version_id
+		JOIN ingredient_profile_versions ipv ON ipv.id=p.current_ingredient_profile_version_id
+		JOIN inventory_batches b
+		  ON b.product_id=p.id
+		 AND b.user_id=p.user_id
+		 AND b.workspace_id=p.workspace_id
+		 AND b.ingredient_profile_version_id=ipv.id
+		WHERE p.id=$1
+		  AND p.user_id=$2
+		  AND p.workspace_id=$3`, product.ID, actor.UserID, actor.WorkspaceID).Scan(&completeTargetRows); err != nil {
+		t.Fatal(err)
+	}
+	if completeTargetRows != 1 {
+		t.Fatalf("cleanup fixture is missing target profiles or bound batch: product=%s rows=%d", product.ID, completeTargetRows)
+	}
+}
+
+func assertWorkspaceTimezone(t *testing.T, ctx context.Context, pool *pgxpool.Pool, actor Actor) {
+	t.Helper()
+	var matches int
+	err := pool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM workspaces w
+		JOIN workspace_timezone_versions tz ON tz.id=w.current_timezone_version_id
+		WHERE w.id=$1
+		  AND w.owner_user_id=$2
+		  AND tz.workspace_id=w.id
+		  AND tz.user_id=w.owner_user_id
+		  AND tz.business_version=1
+		  AND tz.iana_timezone='Etc/UTC'
+		  AND tz.confirmation_state='needs_confirmation'
+		  AND tz.source='legacy_unspecified'
+		  AND tz.effective_to IS NULL
+		  AND (SELECT count(*) FROM workspace_timezone_versions all_tz WHERE all_tz.workspace_id=w.id)=1`, actor.WorkspaceID, actor.UserID).Scan(&matches)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if matches != 1 {
+		t.Fatalf("workspace timezone contract mismatch for workspace %s and user %s: got %d rows", actor.WorkspaceID, actor.UserID, matches)
 	}
 }

@@ -31,6 +31,29 @@ FROM products
 GROUP BY product_type, status
 ORDER BY product_type, status;
 
+SELECT
+    count(*) FILTER (WHERE p.product_type = 'supplement') AS supported_products,
+    count(*) FILTER (WHERE p.product_type = 'supplement' AND NOT EXISTS (
+        SELECT 1 FROM product_ingredients pi WHERE pi.product_id = p.id
+    )) AS supported_products_without_ingredients,
+    count(*) FILTER (WHERE p.product_type IN ('otc', 'prescription')) AS unsupported_products,
+    count(*) FILTER (WHERE p.ingredient_serving_quantity <= 0) AS invalid_serving_quantity_products
+FROM products p;
+
+SELECT
+    count(*) AS source_ingredient_rows,
+    count(*) FILTER (WHERE amount = 0) AS zero_amount_rows,
+    count(DISTINCT product_id) AS products_with_source_ingredients
+FROM product_ingredients;
+
+SELECT count(*) AS supported_batches_requiring_profile_binding
+FROM inventory_batches b
+JOIN products p
+  ON p.id = b.product_id
+ AND p.user_id = b.user_id
+ AND p.workspace_id = b.workspace_id
+WHERE p.product_type = 'supplement';
+
 SELECT 'unsupported_product_type' AS anomaly, count(*) AS row_count
 FROM products
 WHERE product_type IN ('otc', 'prescription')
@@ -121,5 +144,16 @@ FROM information_schema.columns
 WHERE table_schema = current_schema()
   AND table_name = 'workspaces'
   AND column_name = 'current_timezone_version_id';
+
+SELECT required.table_name,
+       to_regclass(current_schema() || '.' || required.table_name) IS NOT NULL AS present
+FROM (VALUES
+    ('product_profile_versions'),
+    ('ingredient_profile_versions'),
+    ('ingredient_profile_items'),
+    ('product_media_links'),
+    ('product_deletion_jobs')
+) AS required(table_name)
+ORDER BY required.table_name;
 
 COMMIT;

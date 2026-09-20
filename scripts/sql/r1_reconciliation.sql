@@ -15,7 +15,13 @@ FROM (VALUES
     ('ingredient_profile_versions'),
     ('ingredient_profile_items'),
     ('product_media_links'),
-    ('product_deletion_jobs')
+    ('product_deletion_jobs'),
+    ('product_plans'),
+    ('schedule_versions'),
+    ('dose_slots'),
+    ('plan_state_intervals'),
+    ('scheduled_occurrences'),
+    ('r1_product_plan_backfill_state')
 ) AS required(table_name)
 ORDER BY required.table_name;
 
@@ -74,6 +80,11 @@ UNION ALL SELECT 'ingredient_profile_versions', count(*) FROM ingredient_profile
 UNION ALL SELECT 'ingredient_profile_items', count(*) FROM ingredient_profile_items
 UNION ALL SELECT 'product_media_links', count(*) FROM product_media_links
 UNION ALL SELECT 'product_deletion_jobs', count(*) FROM product_deletion_jobs
+UNION ALL SELECT 'product_plans', count(*) FROM product_plans
+UNION ALL SELECT 'schedule_versions', count(*) FROM schedule_versions
+UNION ALL SELECT 'dose_slots', count(*) FROM dose_slots
+UNION ALL SELECT 'plan_state_intervals', count(*) FROM plan_state_intervals
+UNION ALL SELECT 'scheduled_occurrences', count(*) FROM scheduled_occurrences
 ORDER BY object;
 
 SELECT count(*) AS supported_product_profile_coverage_violations
@@ -313,6 +324,164 @@ SELECT count(*) AS legacy_confirmed_empty_violations
 FROM ingredient_profile_versions
 WHERE change_kind = 'legacy_import'
   AND profile_status = 'confirmed_empty';
+
+WITH source_outcomes AS (
+    SELECT p.id,
+           EXISTS (
+               SELECT 1 FROM product_plans plan
+               WHERE plan.product_id=p.id AND plan.user_id=p.user_id AND plan.workspace_id=p.workspace_id
+           ) AS mapped,
+           EXISTS (
+               SELECT 1 FROM migration_quarantines q
+               WHERE q.source_id=p.id AND q.state='open'
+                 AND q.reason_code IN (
+                     'schedule_missing','schedule_tenant_mismatch','product_profile_missing',
+                     'workspace_timezone_missing','day_cycle_tenant_mismatch','schedule_rule_out_of_range',
+                     'schedule_invalid_local_time','schedule_duplicate_local_time',
+                     'schedule_slot_count_mismatch','target_schedule_conflict','target_plan_state_conflict'
+                 )
+           ) AS quarantined
+    FROM products p
+    WHERE p.product_type='supplement'
+)
+SELECT count(*) AS plan_source_outcome_exclusivity_violations
+FROM source_outcomes
+WHERE mapped = quarantined;
+
+SELECT count(*) AS unsupported_product_plan_violations
+FROM products p
+WHERE p.product_type IN ('otc','prescription')
+  AND EXISTS (SELECT 1 FROM product_plans plan WHERE plan.product_id=p.id);
+
+SELECT count(*) AS plan_tenant_relationship_violations
+FROM (
+    SELECT plan.id
+    FROM product_plans plan
+    JOIN products p ON p.id=plan.product_id
+    WHERE plan.user_id<>p.user_id OR plan.workspace_id<>p.workspace_id
+    UNION ALL
+    SELECT sv.id
+    FROM schedule_versions sv
+    JOIN product_plans plan ON plan.id=sv.product_plan_id
+    LEFT JOIN product_profile_versions profile
+      ON profile.id=sv.product_profile_version_id
+     AND profile.product_id=sv.product_id
+     AND profile.user_id=sv.user_id
+     AND profile.workspace_id=sv.workspace_id
+    LEFT JOIN workspace_timezone_versions tz
+      ON tz.id=sv.timezone_version_id
+     AND tz.user_id=sv.user_id
+     AND tz.workspace_id=sv.workspace_id
+    WHERE sv.product_id<>plan.product_id OR sv.user_id<>plan.user_id OR sv.workspace_id<>plan.workspace_id
+       OR profile.id IS NULL OR tz.id IS NULL
+    UNION ALL
+    SELECT slot.id
+    FROM dose_slots slot
+    JOIN schedule_versions sv ON sv.id=slot.schedule_version_id
+    WHERE slot.product_plan_id<>sv.product_plan_id OR slot.product_id<>sv.product_id
+       OR slot.user_id<>sv.user_id OR slot.workspace_id<>sv.workspace_id
+) violations;
+
+SELECT count(*) AS current_schedule_pointer_violations
+FROM product_plans plan
+LEFT JOIN schedule_versions sv
+  ON sv.id=plan.current_schedule_version_id
+ AND sv.product_plan_id=plan.id
+ AND sv.product_id=plan.product_id
+ AND sv.user_id=plan.user_id
+ AND sv.workspace_id=plan.workspace_id
+ AND sv.version_state='active'
+WHERE plan.current_schedule_version_id IS NULL OR sv.id IS NULL;
+
+SELECT count(*) AS schedule_interval_overlap_violations
+FROM schedule_versions left_version
+JOIN schedule_versions right_version
+  ON right_version.product_plan_id=left_version.product_plan_id
+ AND right_version.id>left_version.id
+ AND right_version.version_state='active'
+ AND left_version.version_state='active'
+ AND daterange(right_version.effective_from,right_version.effective_to,'[)')
+     && daterange(left_version.effective_from,left_version.effective_to,'[)');
+
+SELECT count(*) AS plan_state_interval_overlap_violations
+FROM plan_state_intervals left_interval
+JOIN plan_state_intervals right_interval
+  ON right_interval.product_plan_id=left_interval.product_plan_id
+ AND right_interval.id>left_interval.id
+ AND tstzrange(right_interval.effective_from,right_interval.effective_to,'[)')
+     && tstzrange(left_interval.effective_from,left_interval.effective_to,'[)');
+
+SELECT count(*) AS plan_without_open_state_interval
+FROM product_plans plan
+WHERE NOT EXISTS (
+    SELECT 1 FROM plan_state_intervals state
+    WHERE state.product_plan_id=plan.id AND state.effective_to IS NULL
+);
+
+WITH current_schedule AS (
+    SELECT p.id AS product_id,p.user_id,p.workspace_id,p.dose_quantity,p.dose_times_per_day,
+           p.with_food,ps.reminder_times,plan.id AS plan_id,sv.id AS schedule_id
+    FROM products p
+    JOIN product_schedules ps
+      ON ps.product_id=p.id AND ps.user_id=p.user_id AND ps.workspace_id=p.workspace_id
+    JOIN product_plans plan
+      ON plan.product_id=p.id AND plan.user_id=p.user_id AND plan.workspace_id=p.workspace_id
+    JOIN schedule_versions sv
+      ON sv.id=plan.current_schedule_version_id AND sv.product_plan_id=plan.id
+    WHERE p.product_type='supplement'
+), target_slots AS (
+    SELECT current_schedule.*,
+           count(slot.id) AS slot_count,
+           array_agg(to_char(slot.local_time,'HH24:MI') ORDER BY slot.local_time) AS target_times,
+           count(*) FILTER (
+               WHERE slot.quantity<>current_schedule.dose_quantity
+                  OR slot.meal_relation<>CASE WHEN current_schedule.with_food IS TRUE
+                                              THEN 'with_meal' ELSE 'unspecified' END
+           ) AS value_mismatch_count
+    FROM current_schedule
+    LEFT JOIN dose_slots slot ON slot.schedule_version_id=current_schedule.schedule_id
+    GROUP BY current_schedule.product_id,current_schedule.user_id,current_schedule.workspace_id,
+             current_schedule.dose_quantity,current_schedule.dose_times_per_day,
+             current_schedule.with_food,current_schedule.reminder_times,
+             current_schedule.plan_id,current_schedule.schedule_id
+)
+SELECT count(*) AS current_dose_slot_mapping_violations
+FROM target_slots
+WHERE slot_count<>dose_times_per_day
+   OR target_times IS DISTINCT FROM ARRAY(
+       SELECT DISTINCT value FROM unnest(reminder_times) AS value ORDER BY value
+   )
+   OR value_mismatch_count<>0;
+
+SELECT count(*) AS occurrence_natural_key_duplicate_violations
+FROM (
+    SELECT workspace_id,product_id,schedule_version_id,local_date,dose_slot_id
+    FROM scheduled_occurrences
+    GROUP BY workspace_id,product_id,schedule_version_id,local_date,dose_slot_id
+    HAVING count(*)<>1
+) duplicates;
+
+SELECT count(*) AS occurrence_deterministic_id_violations
+FROM scheduled_occurrences occurrence
+WHERE occurrence.id<>r1_scheduled_occurrence_id(
+    occurrence.schedule_version_id,occurrence.local_date,occurrence.dose_slot_id
+);
+
+SELECT count(*) AS occurrence_snapshot_violations
+FROM scheduled_occurrences occurrence
+JOIN dose_slots slot ON slot.id=occurrence.dose_slot_id
+JOIN schedule_versions sv ON sv.id=occurrence.schedule_version_id
+WHERE occurrence.planned_quantity<>slot.quantity
+   OR occurrence.meal_relation_snapshot<>slot.meal_relation
+   OR occurrence.slot_label_snapshot<>slot.label
+   OR occurrence.iana_timezone<>sv.iana_timezone
+   OR occurrence.timezone_version_id<>sv.timezone_version_id;
+
+SELECT cycle_state,attempt_count,processed_count,mapped_count,unchanged_count,
+       appended_count,quarantined_count,source_count,source_snapshot_hash,
+       last_progress_at,last_completed_at
+FROM r1_product_plan_backfill_state
+WHERE singleton;
 
 WITH replay AS (
     SELECT b.id,

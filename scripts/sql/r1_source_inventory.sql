@@ -123,6 +123,72 @@ SELECT
 FROM product_schedules;
 
 SELECT
+    count(*) FILTER (WHERE p.product_type = 'supplement' AND s.product_id IS NULL)
+        AS supported_products_without_schedule,
+    count(*) FILTER (
+        WHERE p.product_type = 'supplement'
+          AND cardinality(s.reminder_times) IS DISTINCT FROM p.dose_times_per_day
+    ) AS schedule_slot_count_mismatch_rows,
+    count(*) FILTER (
+        WHERE p.product_type = 'supplement'
+          AND cardinality(s.reminder_times) IS DISTINCT FROM (
+              SELECT count(DISTINCT value) FROM unnest(s.reminder_times) AS value
+          )
+    ) AS duplicate_reminder_time_rows,
+    count(*) FILTER (
+        WHERE p.product_type = 'supplement'
+          AND EXISTS (
+              SELECT 1 FROM unnest(s.reminder_times) AS value
+              WHERE value !~ '^(?:[01][0-9]|2[0-3]):[0-5][0-9]$'
+          )
+    ) AS invalid_reminder_time_rows,
+    count(*) FILTER (
+        WHERE p.product_type = 'supplement'
+          AND cardinality(s.weekdays) IS DISTINCT FROM (
+              SELECT count(DISTINCT value) FROM unnest(s.weekdays) AS value
+          )
+    ) AS duplicate_weekday_rows
+FROM products p
+LEFT JOIN product_schedules s
+  ON s.product_id = p.id
+ AND s.user_id = p.user_id
+ AND s.workspace_id = p.workspace_id;
+
+SELECT 'day_cycle_orphan' AS anomaly, count(*) AS row_count
+FROM day_cycle_versions history
+LEFT JOIN products p ON p.id = history.product_id
+WHERE p.id IS NULL
+UNION ALL
+SELECT 'day_cycle_tenant_mismatch', count(*)
+FROM day_cycle_versions history
+JOIN products p ON p.id = history.product_id
+WHERE history.user_id <> p.user_id OR history.workspace_id <> p.workspace_id
+UNION ALL
+SELECT 'day_cycle_out_of_target_range', count(*)
+FROM day_cycle_versions history
+WHERE history.cycle_days NOT BETWEEN 1 AND 365
+   OR history.take_days NOT BETWEEN 1 AND history.cycle_days
+ORDER BY anomaly;
+
+SELECT
+    count(DISTINCT product_id) AS products_with_day_cycle_history,
+    count(*) AS day_cycle_history_rows,
+    max(history_count) AS maximum_versions_per_product
+FROM (
+    SELECT product_id, count(*) AS history_count
+    FROM day_cycle_versions
+    GROUP BY product_id
+) history_counts;
+
+SELECT count(*) AS workspace_timezone_coverage_violations
+FROM workspaces w
+LEFT JOIN workspace_timezone_versions tz
+  ON tz.id = w.current_timezone_version_id
+ AND tz.user_id = w.owner_user_id
+ AND tz.workspace_id = w.id
+WHERE w.current_timezone_version_id IS NULL OR tz.id IS NULL OR tz.effective_to IS NOT NULL;
+
+SELECT
     count(*) FILTER (WHERE rs.status = 'confirmed' AND rs.product_id IS NULL) AS confirmed_without_product,
     count(*) FILTER (WHERE rs.status <> 'confirmed' AND rs.product_id IS NOT NULL) AS unconfirmed_with_product
 FROM recognition_sets rs;

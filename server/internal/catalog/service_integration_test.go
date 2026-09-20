@@ -276,6 +276,22 @@ func createCatalogOwner(t *testing.T, ctx context.Context, pool *pgxpool.Pool, u
 	if _, err := pool.Exec(ctx, `INSERT INTO workspace_members (workspace_id,user_id,role,created_at) VALUES ($1,$2,'owner',$3)`, workspaceID, userID, now); err != nil {
 		t.Fatal(err)
 	}
+	timezoneVersionID, err := newUUID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `
+		INSERT INTO workspace_timezone_versions (
+			id,user_id,workspace_id,business_version,iana_timezone,confirmation_state,source,effective_from,created_at
+		) VALUES ($1,$2,$3,1,'Etc/UTC','needs_confirmation','legacy_unspecified',$4,$4)`,
+		timezoneVersionID, userID, workspaceID, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `
+		UPDATE workspaces SET current_timezone_version_id=$1
+		WHERE id=$2 AND owner_user_id=$3`, timezoneVersionID, workspaceID, userID); err != nil {
+		t.Fatal(err)
+	}
 	return Scope{UserID: userID, WorkspaceID: workspaceID}
 }
 

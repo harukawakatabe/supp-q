@@ -296,16 +296,21 @@ func normalizeCreate(input CreateProductInput, now time.Time) (CreateProductInpu
 	if input.Schedule.LongCycle.RestWeeks < 0 {
 		return input, core.Schedule{}, NewError("invalid_schedule", "停用周数不能为负数。")
 	}
-	if len(input.Schedule.ReminderTimes) == 0 {
-		input.Schedule.ReminderTimes = []string{"09:00"}
-	}
 	if len(input.Schedule.ReminderTimes) > 8 {
 		return input, core.Schedule{}, NewError("invalid_schedule", "提醒时间不能超过 8 个。")
 	}
+	if len(input.Schedule.ReminderTimes) != input.DoseTimesPerDay {
+		return input, core.Schedule{}, NewError("invalid_schedule", "提醒时间数量必须与每日次数一致。")
+	}
+	seenReminderTimes := make(map[string]struct{}, len(input.Schedule.ReminderTimes))
 	for _, value := range input.Schedule.ReminderTimes {
 		if !reminderPattern.MatchString(value) {
 			return input, core.Schedule{}, NewError("invalid_schedule", "提醒时间必须使用 HH:MM。")
 		}
+		if _, exists := seenReminderTimes[value]; exists {
+			return input, core.Schedule{}, NewError("invalid_schedule", "提醒时间不能重复。")
+		}
+		seenReminderTimes[value] = struct{}{}
 	}
 	if input.OpeningBatch.ExpiryDate != "" {
 		if _, err = core.ParseDate(input.OpeningBatch.ExpiryDate); err != nil {
@@ -390,6 +395,9 @@ func (service *Service) createProductTx(ctx context.Context, tx pgx.Tx, scope Sc
 		return "", err
 	}
 	if _, err = tx.Exec(ctx, `INSERT INTO day_cycle_versions (id,user_id,workspace_id,product_id,effective_date,enabled,cycle_days,take_days,anchor_date,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, versionID, scope.UserID, scope.WorkspaceID, productID, schedule.DayCycle.AnchorDate, schedule.DayCycle.Enabled, schedule.DayCycle.CycleDays, schedule.DayCycle.TakeDays, schedule.DayCycle.AnchorDate, now); err != nil {
+		return "", err
+	}
+	if err = createInitialPlanCompatibilityTx(ctx, tx, scope, productID, input, schedule, dose, now); err != nil {
 		return "", err
 	}
 	var expiry any
@@ -756,6 +764,7 @@ func (service *Service) UpdateProduct(ctx context.Context, scope Scope, productI
 	if err != nil {
 		return Product{}, err
 	}
+	requestedPlanStatus := normalized.Status
 	dose, _ := core.QuantityFromFloat(normalized.DoseQuantity)
 	serving, _ := core.QuantityFromFloat(normalized.IngredientServingQuantity)
 	weekdays := make([]int16, len(schedule.Weekdays))
@@ -833,6 +842,9 @@ func (service *Service) UpdateProduct(ctx context.Context, scope Scope, productI
 		if _, err = tx.Exec(ctx, `UPDATE products SET aggregate_version=aggregate_version+1 WHERE id=$1 AND user_id=$2 AND workspace_id=$3`, productID, scope.UserID, scope.WorkspaceID); err != nil {
 			return Product{}, err
 		}
+	}
+	if err = syncPlanCompatibilityTx(ctx, tx, scope, productID, normalized, schedule, dose, effectiveDate, requestedPlanStatus, now); err != nil {
+		return Product{}, err
 	}
 	if err = tx.Commit(ctx); err != nil {
 		return Product{}, err

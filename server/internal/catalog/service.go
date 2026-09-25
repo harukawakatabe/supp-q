@@ -332,16 +332,12 @@ func normalizeCreate(input CreateProductInput, now time.Time) (CreateProductInpu
 
 func (service *Service) CreateProduct(ctx context.Context, scope Scope, input CreateProductInput) (Product, error) {
 	now := service.now()
-	normalized, schedule, err := normalizeCreate(input, now)
-	if err != nil {
-		return Product{}, err
-	}
 	tx, err := service.pool.Begin(ctx)
 	if err != nil {
 		return Product{}, err
 	}
 	defer tx.Rollback(ctx)
-	id, err := service.createProductTx(ctx, tx, scope, normalized, schedule, now)
+	id, err := service.CreateProductTx(ctx, tx, scope, input, now)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if input.SourceRecognitionSetID != "" && errors.As(err, &pgErr) && pgErr.ConstraintName == "products_source_recognition_set_uidx" {
@@ -354,6 +350,17 @@ func (service *Service) CreateProduct(ctx context.Context, scope Scope, input Cr
 		return Product{}, err
 	}
 	return service.GetProduct(ctx, scope, id)
+}
+
+// CreateProductTx creates the full product/profile/plan/opening-inventory
+// aggregate inside a caller-owned transaction. Callers retain commit authority
+// so confirmation state and product creation cannot diverge.
+func (service *Service) CreateProductTx(ctx context.Context, tx pgx.Tx, scope Scope, input CreateProductInput, now time.Time) (string, error) {
+	normalized, schedule, err := normalizeCreate(input, now)
+	if err != nil {
+		return "", err
+	}
+	return service.createProductTx(ctx, tx, scope, normalized, schedule, now)
 }
 
 func (service *Service) createProductTx(ctx context.Context, tx pgx.Tx, scope Scope, input CreateProductInput, schedule core.Schedule, now time.Time) (string, error) {

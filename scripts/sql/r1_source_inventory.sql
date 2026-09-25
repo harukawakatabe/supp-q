@@ -222,4 +222,51 @@ FROM (VALUES
 ) AS required(table_name)
 ORDER BY required.table_name;
 
+SELECT required.table_name,
+       to_regclass(current_schema() || '.' || required.table_name) IS NOT NULL AS present
+FROM (VALUES
+    ('capture_drafts'),
+    ('capture_slots'),
+    ('capture_slot_versions'),
+    ('capture_recognition_jobs'),
+    ('capture_recognition_attempts'),
+    ('file_links'),
+    ('recognition_evidence'),
+    ('recognition_candidates'),
+    ('confirmation_drafts'),
+    ('r1_capture_backfill_state')
+) AS required(table_name)
+ORDER BY required.table_name;
+
+SELECT 'capture_drafts' AS entity,count(*) AS row_count FROM capture_drafts
+UNION ALL SELECT 'capture_slots',count(*) FROM capture_slots
+UNION ALL SELECT 'capture_slot_versions',count(*) FROM capture_slot_versions
+UNION ALL SELECT 'capture_recognition_jobs',count(*) FROM capture_recognition_jobs
+UNION ALL SELECT 'capture_recognition_attempts',count(*) FROM capture_recognition_attempts
+UNION ALL SELECT 'file_links',count(*) FROM file_links
+UNION ALL SELECT 'recognition_evidence',count(*) FROM recognition_evidence
+UNION ALL SELECT 'recognition_candidates',count(*) FROM recognition_candidates
+UNION ALL SELECT 'confirmation_drafts',count(*) FROM confirmation_drafts
+ORDER BY entity;
+
+SELECT
+    count(*) FILTER (WHERE capture_draft_id IS NULL) AS recognition_sets_not_mapped,
+    count(*) FILTER (WHERE status IN ('processing','awaiting_confirmation')) AS active_legacy_sets
+FROM recognition_sets;
+
+SELECT
+    count(*) FILTER (WHERE version.id IS NULL) AS legacy_roles_without_slot_version,
+    count(*) FILTER (WHERE target_job.id IS NULL) AS legacy_roles_without_target_job,
+    count(*) FILTER (WHERE link.id IS NULL) AS legacy_roles_without_file_link
+FROM recognition_jobs legacy
+LEFT JOIN capture_slot_versions version ON version.id=legacy.capture_slot_version_id
+LEFT JOIN capture_recognition_jobs target_job ON target_job.legacy_recognition_job_id=legacy.id
+LEFT JOIN file_links link
+  ON link.capture_slot_version_id=version.id AND link.purpose='capture_slot_source';
+
+SELECT cycle_state,attempt_count,processed_count,mapped_count,unchanged_count,
+       quarantined_count,source_count,source_snapshot_hash,last_progress_at,cycle_completed_at
+FROM r1_capture_backfill_state
+WHERE singleton;
+
 COMMIT;

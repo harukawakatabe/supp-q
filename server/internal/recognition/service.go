@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"suppq.local/server/internal/catalog"
 	"suppq.local/server/internal/provider"
@@ -195,6 +196,10 @@ func (service *Service) CreateSet(ctx context.Context, scope Scope, uploads []Up
 			return Set{}, err
 		}
 	}
+	if _, err = tx.Exec(ctx, `SELECT r1_sync_capture_compat_set($1,'legacy_compat')`, setID); err != nil {
+		service.deleteStored(ctx, storedObjects)
+		return Set{}, err
+	}
 	if err = tx.Commit(ctx); err != nil {
 		service.deleteStored(ctx, storedObjects)
 		return Set{}, err
@@ -296,18 +301,41 @@ func (service *Service) GetFile(ctx context.Context, scope Scope, id string) (st
 func (service *Service) RetryJob(ctx context.Context, scope Scope, id string) (Set, error) {
 	now := service.now()
 	var setID string
-	result, err := service.pool.Exec(ctx, `UPDATE recognition_jobs SET status='queued',run_after=$1,lease_until=NULL,error_code='',error_message='',completed_at=NULL,updated_at=$1 WHERE id=$2 AND user_id=$3 AND workspace_id=$4 AND status IN ('failed','partial','succeeded') AND EXISTS (SELECT 1 FROM recognition_sets rs WHERE rs.id=recognition_set_id AND rs.status<>'confirmed')`, now, id, scope.UserID, scope.WorkspaceID)
+	tx, err := service.pool.Begin(ctx)
+	if err != nil {
+		return Set{}, err
+	}
+	defer tx.Rollback(ctx)
+	result, err := tx.Exec(ctx, `UPDATE recognition_jobs SET status='queued',run_after=$1,
+		lease_until=NULL,error_code='',error_message='',result=NULL,trace='{}'::jsonb,
+		ocr_text='',ocr_provider='',ocr_model='',ocr_duration_ms=NULL,ocr_completed_at=NULL,
+		completed_at=NULL,updated_at=$1
+		WHERE id=$2 AND user_id=$3 AND workspace_id=$4
+		  AND status IN ('failed','partial','succeeded')
+		  AND EXISTS (SELECT 1 FROM recognition_sets rs
+		              WHERE rs.id=recognition_set_id AND rs.status NOT IN ('confirmed','cancelled'))`,
+		now, id, scope.UserID, scope.WorkspaceID)
 	if err != nil {
 		return Set{}, err
 	}
 	if result.RowsAffected() != 1 {
 		return Set{}, ErrNotFound
 	}
-	err = service.pool.QueryRow(ctx, `SELECT recognition_set_id FROM recognition_jobs WHERE id=$1 AND user_id=$2 AND workspace_id=$3`, id, scope.UserID, scope.WorkspaceID).Scan(&setID)
+	err = tx.QueryRow(ctx, `SELECT recognition_set_id FROM recognition_jobs
+		WHERE id=$1 AND user_id=$2 AND workspace_id=$3`, id, scope.UserID, scope.WorkspaceID).Scan(&setID)
 	if err != nil {
 		return Set{}, err
 	}
-	_, _ = service.pool.Exec(ctx, `UPDATE recognition_sets SET status='processing',updated_at=$1 WHERE id=$2 AND user_id=$3 AND workspace_id=$4`, now, setID, scope.UserID, scope.WorkspaceID)
+	if _, err = tx.Exec(ctx, `UPDATE recognition_sets SET status='processing',updated_at=$1
+		WHERE id=$2 AND user_id=$3 AND workspace_id=$4`, now, setID, scope.UserID, scope.WorkspaceID); err != nil {
+		return Set{}, err
+	}
+	if _, err = tx.Exec(ctx, `SELECT r1_refresh_capture_compat_set($1,$2)`, setID, now); err != nil {
+		return Set{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return Set{}, err
+	}
 	return service.GetSet(ctx, scope, setID)
 }
 
@@ -324,7 +352,13 @@ func (service *Service) RunOne(ctx context.Context, recognizer provider.Recognit
 	}
 	defer tx.Rollback(ctx)
 	var job claimedJob
-	err = tx.QueryRow(ctx, `SELECT j.id,j.recognition_set_id,j.file_id,j.role,f.object_key,f.mime_type,j.attempt,j.max_attempts FROM recognition_jobs j JOIN files f ON f.id=j.file_id WHERE ((j.status='queued' AND j.run_after<=$1) OR (j.status='running' AND j.lease_until<$1)) ORDER BY j.run_after,j.created_at FOR UPDATE OF j SKIP LOCKED LIMIT 1`, now).Scan(&job.ID, &job.SetID, &job.FileID, &job.Role, &job.ObjectKey, &job.MIME, &job.Attempt, &job.MaxAttempts)
+	err = tx.QueryRow(ctx, `SELECT j.id,j.recognition_set_id,j.file_id,j.role,f.object_key,f.mime_type,j.attempt,j.max_attempts
+		FROM recognition_jobs j
+		JOIN recognition_sets rs ON rs.id=j.recognition_set_id
+		JOIN files f ON f.id=j.file_id
+		WHERE rs.status NOT IN ('confirmed','cancelled')
+		  AND ((j.status='queued' AND j.run_after<=$1) OR (j.status='running' AND j.lease_until<$1))
+		ORDER BY j.run_after,j.created_at FOR UPDATE OF j SKIP LOCKED LIMIT 1`, now).Scan(&job.ID, &job.SetID, &job.FileID, &job.Role, &job.ObjectKey, &job.MIME, &job.Attempt, &job.MaxAttempts)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
 	}
@@ -334,6 +368,14 @@ func (service *Service) RunOne(ctx context.Context, recognizer provider.Recognit
 	job.Attempt++
 	if _, err = tx.Exec(ctx, `UPDATE recognition_jobs SET status='running',provider=$1,attempt=$2,started_at=COALESCE(started_at,$3),lease_until=$4,updated_at=$3 WHERE id=$5`, recognizer.Name(), job.Attempt, now, now.Add(5*time.Minute), job.ID); err != nil {
 		return false, err
+	}
+	var targetStarted bool
+	if err = tx.QueryRow(ctx, `SELECT r1_begin_capture_attempt($1,$2,$3,$4,$5)`,
+		job.ID, job.Attempt, recognizer.Name(), now.Add(5*time.Minute), now).Scan(&targetStarted); err != nil {
+		return false, err
+	}
+	if !targetStarted {
+		return false, errors.New("recognition job is not bound to a capture attempt")
 	}
 	if err = tx.Commit(ctx); err != nil {
 		return false, err
@@ -348,14 +390,33 @@ func (service *Service) RunOne(ctx context.Context, recognizer provider.Recognit
 	if runErr == nil {
 		recognitionResult, runErr = recognizer.Recognize(jobCtx, job.Role, job.MIME, data, func(sinkCtx context.Context, evidence provider.Evidence) error {
 			savedAt := service.now()
-			result, saveErr := service.pool.Exec(sinkCtx, `UPDATE recognition_jobs SET ocr_text=$1,ocr_provider=$2,ocr_model=$3,ocr_duration_ms=$4,ocr_completed_at=$5,updated_at=$5 WHERE id=$6 AND status='running'`, evidence.RawText, evidence.Provider, evidence.Model, evidence.DurationMS, savedAt, job.ID)
+			evidenceTx, saveErr := service.pool.Begin(sinkCtx)
+			if saveErr != nil {
+				return saveErr
+			}
+			defer evidenceTx.Rollback(sinkCtx)
+			result, saveErr := evidenceTx.Exec(sinkCtx, `UPDATE recognition_jobs
+				SET ocr_text=$1,ocr_provider=$2,ocr_model=$3,ocr_duration_ms=$4,
+				    ocr_completed_at=$5,updated_at=$5
+				WHERE id=$6 AND status='running' AND attempt=$7`,
+				evidence.RawText, evidence.Provider, evidence.Model, evidence.DurationMS, savedAt, job.ID, job.Attempt)
 			if saveErr != nil {
 				return saveErr
 			}
 			if result.RowsAffected() != 1 {
 				return errors.New("recognition job no longer running")
 			}
-			return nil
+			var recorded bool
+			if saveErr = evidenceTx.QueryRow(sinkCtx,
+				`SELECT r1_record_recognition_evidence($1,$2,$3,$4,$5,$6,$7)`,
+				job.ID, job.Attempt, evidence.RawText, evidence.Provider, evidence.Model,
+				evidence.DurationMS, savedAt).Scan(&recorded); saveErr != nil {
+				return saveErr
+			}
+			if !recorded {
+				return errors.New("recognition evidence was not attempt-bound")
+			}
+			return evidenceTx.Commit(sinkCtx)
 		})
 	}
 	if runErr != nil {
@@ -375,10 +436,33 @@ func (service *Service) RunOne(ctx context.Context, recognizer provider.Recognit
 		status = "succeeded"
 	}
 	completed := service.now()
-	if _, err = service.pool.Exec(ctx, `UPDATE recognition_jobs SET status=$1,provider=$2,confidence=$3,result=$4,trace=$5,error_code='',error_message='',lease_until=NULL,completed_at=$6,updated_at=$6 WHERE id=$7`, status, recognizer.Name(), candidate.Confidence, encoded, trace, completed, job.ID); err != nil {
+	finishTx, err := service.pool.Begin(ctx)
+	if err != nil {
 		return true, err
 	}
-	return true, service.refreshSetStatus(ctx, job.SetID, completed)
+	defer finishTx.Rollback(ctx)
+	result, err := finishTx.Exec(ctx, `UPDATE recognition_jobs SET status=$1,provider=$2,
+		confidence=$3,result=$4,trace=$5,error_code='',error_message='',lease_until=NULL,
+		completed_at=$6,updated_at=$6 WHERE id=$7 AND status='running' AND attempt=$8`,
+		status, recognizer.Name(), candidate.Confidence, encoded, trace, completed, job.ID, job.Attempt)
+	if err != nil {
+		return true, err
+	}
+	var merged bool
+	if err = finishTx.QueryRow(ctx, `SELECT r1_record_recognition_candidate($1,$2,$3,$4,$5,$6,$7)`,
+		job.ID, job.Attempt, encoded, trace, candidate.Confidence, recognizer.Name(), completed).Scan(&merged); err != nil {
+		return true, err
+	}
+	if result.RowsAffected() == 1 {
+		if err = service.refreshSetStatusTx(ctx, finishTx, job.SetID, completed); err != nil {
+			return true, err
+		}
+	}
+	if err = finishTx.Commit(ctx); err != nil {
+		return true, err
+	}
+	_ = merged
+	return true, nil
 }
 
 func (service *Service) finishFailure(ctx context.Context, job claimedJob, providerName string, runErr error) error {
@@ -388,26 +472,57 @@ func (service *Service) finishFailure(ctx context.Context, job claimedJob, provi
 		failure = typed
 	}
 	now := service.now()
-	if failure.Retryable && job.Attempt < job.MaxAttempts {
-		delay := time.Duration(1<<(job.Attempt-1)) * 5 * time.Second
-		_, err := service.pool.Exec(ctx, `UPDATE recognition_jobs SET status='queued',provider=$1,error_code=$2,error_message=$3,run_after=$4,lease_until=NULL,updated_at=$5 WHERE id=$6`, providerName, failure.Code, failure.Message, now.Add(delay), now, job.ID)
-		return err
-	}
-	_, err := service.pool.Exec(ctx, `UPDATE recognition_jobs SET status='failed',provider=$1,error_code=$2,error_message=$3,lease_until=NULL,completed_at=$4,updated_at=$4 WHERE id=$5`, providerName, failure.Code, failure.Message, now, job.ID)
+	tx, err := service.pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
-	return service.refreshSetStatus(ctx, job.SetID, now)
+	defer tx.Rollback(ctx)
+	var result pgconn.CommandTag
+	if failure.Retryable && job.Attempt < job.MaxAttempts {
+		delay := time.Duration(1<<(job.Attempt-1)) * 5 * time.Second
+		result, err = tx.Exec(ctx, `UPDATE recognition_jobs SET status='queued',provider=$1,
+			error_code=$2,error_message=$3,run_after=$4,lease_until=NULL,updated_at=$5
+			WHERE id=$6 AND status='running' AND attempt=$7`,
+			providerName, failure.Code, failure.Message, now.Add(delay), now, job.ID, job.Attempt)
+	} else {
+		result, err = tx.Exec(ctx, `UPDATE recognition_jobs SET status='failed',provider=$1,
+			error_code=$2,error_message=$3,lease_until=NULL,completed_at=$4,updated_at=$4
+			WHERE id=$5 AND status='running' AND attempt=$6`,
+			providerName, failure.Code, failure.Message, now, job.ID, job.Attempt)
+	}
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() == 0 {
+		return tx.Commit(ctx)
+	}
+	if err = service.refreshSetStatusTx(ctx, tx, job.SetID, now); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
-func (service *Service) refreshSetStatus(ctx context.Context, setID string, now time.Time) error {
-	_, err := service.pool.Exec(ctx, `UPDATE recognition_sets SET status=CASE WHEN EXISTS (SELECT 1 FROM recognition_jobs WHERE recognition_set_id=$1 AND status IN ('queued','running')) THEN 'processing' ELSE 'awaiting_confirmation' END,updated_at=$2 WHERE id=$1 AND status NOT IN ('confirmed','cancelled')`, setID, now)
+func (service *Service) refreshSetStatusTx(ctx context.Context, tx pgx.Tx, setID string, now time.Time) error {
+	if _, err := tx.Exec(ctx, `UPDATE recognition_sets SET status=CASE
+		WHEN EXISTS (SELECT 1 FROM recognition_jobs WHERE recognition_set_id=$1 AND status IN ('queued','running'))
+		THEN 'processing' ELSE 'awaiting_confirmation' END,updated_at=$2
+		WHERE id=$1 AND status NOT IN ('confirmed','cancelled')`, setID, now); err != nil {
+		return err
+	}
+	_, err := tx.Exec(ctx, `SELECT r1_refresh_capture_compat_set($1,$2)`, setID, now)
 	return err
 }
 
 func (service *Service) Confirm(ctx context.Context, scope Scope, setID string, input catalog.CreateProductInput) (catalog.Product, error) {
 	var status string
 	var existing *string
-	err := service.pool.QueryRow(ctx, `SELECT status,product_id FROM recognition_sets WHERE id=$1 AND user_id=$2 AND workspace_id=$3`, setID, scope.UserID, scope.WorkspaceID).Scan(&status, &existing)
+	tx, err := service.pool.Begin(ctx)
+	if err != nil {
+		return catalog.Product{}, err
+	}
+	defer tx.Rollback(ctx)
+	err = tx.QueryRow(ctx, `SELECT status,product_id FROM recognition_sets
+		WHERE id=$1 AND user_id=$2 AND workspace_id=$3 FOR UPDATE`,
+		setID, scope.UserID, scope.WorkspaceID).Scan(&status, &existing)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return catalog.Product{}, ErrNotFound
 	}
@@ -415,6 +530,7 @@ func (service *Service) Confirm(ctx context.Context, scope Scope, setID string, 
 		return catalog.Product{}, err
 	}
 	if existing != nil {
+		_ = tx.Rollback(ctx)
 		return service.catalog.GetProduct(ctx, catalog.Scope(scope), *existing)
 	}
 	if status == "processing" {
@@ -424,14 +540,77 @@ func (service *Service) Confirm(ctx context.Context, scope Scope, setID string, 
 		return catalog.Product{}, newError("recognition_cancelled", "识别任务已取消。")
 	}
 	input.SourceRecognitionSetID = setID
-	product, err := service.catalog.CreateProduct(ctx, catalog.Scope(scope), input)
+	now := service.now()
+	productID, err := service.catalog.CreateProductTx(ctx, tx, catalog.Scope(scope), input, now)
 	if err != nil {
 		return catalog.Product{}, err
 	}
 	payload, _ := json.Marshal(input)
-	now := service.now()
-	_, err = service.pool.Exec(ctx, `UPDATE recognition_sets SET status='confirmed',product_id=$1,confirmed_payload=$2,confirmed_at=$3,updated_at=$3 WHERE id=$4 AND user_id=$5 AND workspace_id=$6`, product.ID, payload, now, setID, scope.UserID, scope.WorkspaceID)
-	return product, err
+	if _, err = tx.Exec(ctx, `UPDATE recognition_sets SET status='confirmed',product_id=$1,
+		confirmed_payload=$2,confirmed_at=$3,updated_at=$3
+		WHERE id=$4 AND user_id=$5 AND workspace_id=$6`,
+		productID, payload, now, setID, scope.UserID, scope.WorkspaceID); err != nil {
+		return catalog.Product{}, err
+	}
+	var draftID string
+	var aggregateVersion int64
+	err = tx.QueryRow(ctx, `UPDATE capture_drafts SET status='confirmed',confirmed_product_id=$1,
+		aggregate_version=aggregate_version+1,confirmed_at=$2,cancelled_at=NULL,updated_at=$2
+		WHERE source_recognition_set_id=$3 AND user_id=$4 AND workspace_id=$5
+		  AND status NOT IN ('confirmed','cancelled')
+		RETURNING id,aggregate_version`, productID, now, setID, scope.UserID, scope.WorkspaceID).Scan(&draftID, &aggregateVersion)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return catalog.Product{}, errors.New("capture draft is not confirmable")
+	}
+	if err != nil {
+		return catalog.Product{}, err
+	}
+	if _, err = tx.Exec(ctx, `UPDATE confirmation_drafts SET status='confirmed',
+		user_payload=$1,confirmed_at=$2,updated_at=$2
+		WHERE id=(SELECT current_confirmation_draft_id FROM capture_drafts WHERE id=$3)
+		  AND capture_draft_id=$3 AND status='editing'`, payload, now, draftID); err != nil {
+		return catalog.Product{}, err
+	}
+	if _, err = tx.Exec(ctx, `INSERT INTO file_links (
+		id,user_id,workspace_id,file_id,capture_draft_id,capture_slot_version_id,
+		product_id,purpose,link_state,source,created_at,released_at
+	) SELECT gen_random_uuid(),source.user_id,source.workspace_id,source.file_id,
+		source.capture_draft_id,source.capture_slot_version_id,$1,'confirmed_product_source',
+		source.link_state,'legacy_compat',$2,source.released_at
+	FROM file_links source
+	JOIN capture_slots slot ON slot.current_slot_version_id=source.capture_slot_version_id
+	WHERE source.capture_draft_id=$3 AND source.purpose='capture_slot_source'
+	ON CONFLICT (capture_slot_version_id,purpose) DO NOTHING`, productID, now, draftID); err != nil {
+		return catalog.Product{}, err
+	}
+	if _, err = tx.Exec(ctx, `INSERT INTO product_media_links (
+		id,user_id,workspace_id,product_id,file_id,purpose,sort_order,effective_from,created_at
+	) SELECT gen_random_uuid(),slot.user_id,slot.workspace_id,$1,version.file_id,
+		CASE slot.role WHEN 'front' THEN 'front' WHEN 'facts' THEN 'facts' ELSE 'supporting' END,
+		CASE slot.role WHEN 'front' THEN 0 WHEN 'facts' THEN 0 ELSE 1 END,$2,$2
+	FROM capture_slots slot
+	JOIN capture_slot_versions version ON version.id=slot.current_slot_version_id
+	JOIN files file ON file.id=version.file_id AND file.status='active'
+	WHERE slot.capture_draft_id=$3 AND version.input_kind='upload'
+	ON CONFLICT DO NOTHING`, productID, now, draftID); err != nil {
+		return catalog.Product{}, err
+	}
+	eventID, createErr := newUUID()
+	if createErr != nil {
+		return catalog.Product{}, createErr
+	}
+	if _, err = tx.Exec(ctx, `INSERT INTO domain_changes (
+		event_id,user_id,workspace_id,aggregate_type,aggregate_id,aggregate_version,
+		change_type,actor_type,correlation_id,minimal_payload,occurred_at,created_at
+	) VALUES ($1,$2,$3,'capture_draft',$4,$5,'capture.confirmed','user',$6,
+		jsonb_build_object('productId',$7::text),$8,$8)`,
+		eventID, scope.UserID, scope.WorkspaceID, draftID, aggregateVersion, setID, productID, now); err != nil {
+		return catalog.Product{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return catalog.Product{}, err
+	}
+	return service.catalog.GetProduct(ctx, catalog.Scope(scope), productID)
 }
 
 func (service *Service) CleanupExpiredDemoObjects(ctx context.Context, limit int) (int, error) {
@@ -461,7 +640,22 @@ func (service *Service) CleanupExpiredDemoObjects(ctx context.Context, limit int
 		if err = service.objects.Delete(ctx, value.key); err != nil {
 			return 0, err
 		}
-		if _, err = service.pool.Exec(ctx, `UPDATE files SET status='deleted',deleted_at=$1 WHERE id=$2 AND status='active'`, service.now(), value.id); err != nil {
+		deletedAt := service.now()
+		tx, beginErr := service.pool.Begin(ctx)
+		if beginErr != nil {
+			return 0, beginErr
+		}
+		if _, err = tx.Exec(ctx, `UPDATE file_links SET link_state='released',released_at=$1
+			WHERE file_id=$2 AND link_state='active'`, deletedAt, value.id); err != nil {
+			_ = tx.Rollback(ctx)
+			return 0, err
+		}
+		if _, err = tx.Exec(ctx, `UPDATE files SET status='deleted',deleted_at=$1
+			WHERE id=$2 AND status='active'`, deletedAt, value.id); err != nil {
+			_ = tx.Rollback(ctx)
+			return 0, err
+		}
+		if err = tx.Commit(ctx); err != nil {
 			return 0, err
 		}
 	}
@@ -497,8 +691,23 @@ func (service *Service) DeleteUserObjects(ctx context.Context, userID string) (i
 			if err = service.objects.Delete(ctx, value.key); err != nil {
 				return deleted, err
 			}
-			result, updateErr := service.pool.Exec(ctx, `UPDATE files SET status='deleted',deleted_at=$1 WHERE id=$2 AND user_id=$3 AND status='active'`, service.now(), value.id, userID)
+			deletedAt := service.now()
+			tx, beginErr := service.pool.Begin(ctx)
+			if beginErr != nil {
+				return deleted, beginErr
+			}
+			if _, updateErr := tx.Exec(ctx, `UPDATE file_links SET link_state='released',released_at=$1
+				WHERE file_id=$2 AND user_id=$3 AND link_state='active'`, deletedAt, value.id, userID); updateErr != nil {
+				_ = tx.Rollback(ctx)
+				return deleted, updateErr
+			}
+			result, updateErr := tx.Exec(ctx, `UPDATE files SET status='deleted',deleted_at=$1
+				WHERE id=$2 AND user_id=$3 AND status='active'`, deletedAt, value.id, userID)
 			if updateErr != nil {
+				_ = tx.Rollback(ctx)
+				return deleted, updateErr
+			}
+			if updateErr = tx.Commit(ctx); updateErr != nil {
 				return deleted, updateErr
 			}
 			deleted += int(result.RowsAffected())

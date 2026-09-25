@@ -25,9 +25,31 @@ type memoryObjects struct {
 }
 type failedProvider struct{}
 
+type blockingProvider struct {
+	ready   chan struct{}
+	release chan struct{}
+}
+
 func (failedProvider) Name() string { return "live:test-failure" }
 func (failedProvider) Recognize(context.Context, string, string, []byte, provider.EvidenceSink) (provider.Result, error) {
 	return provider.Result{}, &provider.Failure{Code: "provider_timeout", Message: "识别超时，图片已保留。"}
+}
+
+func (blockingProvider) Name() string { return "race:stale-attempt" }
+func (value blockingProvider) Recognize(ctx context.Context, _ string, _ string, _ []byte, sink provider.EvidenceSink) (provider.Result, error) {
+	if err := sink(ctx, provider.Evidence{RawText: "stale attempt evidence", Provider: "race", Model: "v1", DurationMS: 1}); err != nil {
+		return provider.Result{}, err
+	}
+	close(value.ready)
+	select {
+	case <-value.release:
+	case <-ctx.Done():
+		return provider.Result{}, ctx.Err()
+	}
+	return provider.Result{Candidate: provider.Candidate{
+		Status: "partial", Confidence: 0.9, RawText: "stale attempt candidate",
+		Fields: map[string]any{"stale": true},
+	}, Trace: provider.Trace{Mode: "race", SelectedRoute: "stale"}}, nil
 }
 
 func (store *memoryObjects) Put(_ context.Context, key, _ string, data []byte) error {
@@ -117,6 +139,16 @@ func TestRecognitionPersistenceWorkerConfirmationAndIsolation(t *testing.T) {
 	if set.Status != "processing" || len(set.Jobs) != 3 || len(objects.items) != 3 {
 		t.Fatalf("unexpected persisted set: %+v objects=%d", set, len(objects.items))
 	}
+	requireRecognitionCount(t, ctx, pool, `SELECT count(*) FROM capture_drafts
+		WHERE source_recognition_set_id=$1 AND source='legacy_compat' AND status='processing'`, set.ID, 1)
+	requireRecognitionCount(t, ctx, pool, `SELECT count(*) FROM capture_slots slot
+		JOIN capture_drafts draft ON draft.id=slot.capture_draft_id
+		WHERE draft.source_recognition_set_id=$1`, set.ID, 3)
+	requireRecognitionCount(t, ctx, pool, `SELECT count(*) FROM capture_slot_versions version
+		JOIN capture_recognition_jobs job ON job.capture_slot_version_id=version.id
+		JOIN file_links link ON link.capture_slot_version_id=version.id
+		JOIN capture_drafts draft ON draft.id=version.capture_draft_id
+		WHERE draft.source_recognition_set_id=$1 AND link.purpose='capture_slot_source'`, set.ID, 3)
 	var productCount int
 	if err = pool.QueryRow(ctx, `SELECT count(*) FROM products WHERE user_id=$1`, owner.UserID).Scan(&productCount); err != nil || productCount != 0 {
 		t.Fatal("unconfirmed recognition created a product")
@@ -149,6 +181,25 @@ func TestRecognitionPersistenceWorkerConfirmationAndIsolation(t *testing.T) {
 			t.Fatalf("unexpected job: %+v", job)
 		}
 	}
+	requireRecognitionCount(t, ctx, pool, `SELECT count(*) FROM recognition_evidence evidence
+		JOIN capture_recognition_jobs job ON job.id=evidence.capture_recognition_job_id
+		WHERE job.legacy_recognition_job_id IN (
+		  SELECT id FROM recognition_jobs WHERE recognition_set_id=$1
+		) AND evidence.job_attempt=job.current_attempt`, set.ID, 3)
+	requireRecognitionCount(t, ctx, pool, `SELECT count(*) FROM recognition_candidates candidate
+		JOIN capture_recognition_jobs job ON job.id=candidate.capture_recognition_job_id
+		WHERE job.legacy_recognition_job_id IN (
+		  SELECT id FROM recognition_jobs WHERE recognition_set_id=$1
+		) AND candidate.job_attempt=job.current_attempt`, set.ID, 3)
+	requireRecognitionCount(t, ctx, pool, `SELECT count(*) FROM capture_recognition_attempts attempt
+		JOIN capture_recognition_jobs job ON job.id=attempt.capture_recognition_job_id
+		WHERE job.legacy_recognition_job_id IN (
+		  SELECT id FROM recognition_jobs WHERE recognition_set_id=$1
+		) AND attempt.status='partial'`, set.ID, 3)
+	requireRecognitionCount(t, ctx, pool, `SELECT count(*) FROM capture_drafts draft
+		JOIN confirmation_drafts confirmation ON confirmation.id=draft.current_confirmation_draft_id
+		WHERE draft.source_recognition_set_id=$1
+		  AND (SELECT count(*) FROM jsonb_object_keys(confirmation.candidate_payload))=3`, set.ID, 1)
 	input := catalog.CreateProductInput{Name: "人工确认 D3", Unit: "粒", DoseQuantity: 1, DoseTimesPerDay: 1, IngredientServingQuantity: 1, RestockThresholdDays: 7, ExpiryReminderDays: 30, Schedule: catalog.ScheduleInput{StartDate: "2026-08-02", Weekdays: []int{0, 1, 2, 3, 4, 5, 6}, ReminderTimes: []string{"09:00"}}, OpeningBatch: catalog.BatchInput{Quantity: 60, ExpiryDate: "2027-12-31", PriceCNY: 99}}
 	product, err := service.Confirm(ctx, owner, set.ID, input)
 	if err != nil {
@@ -157,6 +208,17 @@ func TestRecognitionPersistenceWorkerConfirmationAndIsolation(t *testing.T) {
 	if product.Name != "人工确认 D3" || product.CurrentQuantity != 60 {
 		t.Fatalf("unexpected confirmed product: %+v", product)
 	}
+	requireRecognitionCount(t, ctx, pool, `SELECT count(*) FROM capture_drafts draft
+		JOIN confirmation_drafts confirmation ON confirmation.id=draft.current_confirmation_draft_id
+		WHERE draft.source_recognition_set_id=$1 AND draft.status='confirmed'
+		  AND draft.confirmed_product_id=$2 AND confirmation.status='confirmed'`, set.ID, product.ID, 1)
+	requireRecognitionCount(t, ctx, pool, `SELECT count(*) FROM file_links link
+		JOIN capture_drafts draft ON draft.id=link.capture_draft_id
+		WHERE draft.source_recognition_set_id=$1 AND link.product_id=$2
+		  AND link.purpose='confirmed_product_source'`, set.ID, product.ID, 3)
+	requireRecognitionCount(t, ctx, pool, `SELECT count(*) FROM domain_changes
+		WHERE aggregate_type='capture_draft' AND change_type='capture.confirmed'
+		  AND minimal_payload->>'productId'=$1`, product.ID, 1)
 	same, err := service.Confirm(ctx, owner, set.ID, input)
 	if err != nil || same.ID != product.ID {
 		t.Fatal("confirmation must be idempotent")
@@ -176,6 +238,51 @@ func TestRecognitionPersistenceWorkerConfirmationAndIsolation(t *testing.T) {
 	if _, err = service.catalog.GetProduct(ctx, catalog.Scope(other), product.ID); !errors.Is(err, catalog.ErrNotFound) {
 		t.Fatal("confirmed product leaked across tenant")
 	}
+
+	raceSet, err := service.CreateSet(ctx, owner, []Upload{{Role: "front", Name: "front.png", DeclaredMIME: "image/png", Data: image}, {Role: "facts", Name: "facts.png", DeclaredMIME: "image/png", Data: image}, {Role: "expiry", Name: "expiry.png", DeclaredMIME: "image/png", Data: image}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `UPDATE recognition_jobs SET run_after=$1
+		WHERE recognition_set_id=$2 AND role<>'front'`, now.Add(time.Hour), raceSet.ID); err != nil {
+		t.Fatal(err)
+	}
+	ready := make(chan struct{})
+	release := make(chan struct{})
+	firstDone := make(chan error, 1)
+	go func() {
+		claimed, runErr := service.RunOne(ctx, blockingProvider{ready: ready, release: release})
+		if runErr == nil && !claimed {
+			runErr = errors.New("stale-attempt worker did not claim a job")
+		}
+		firstDone <- runErr
+	}()
+	select {
+	case <-ready:
+	case <-time.After(5 * time.Second):
+		t.Fatal("stale-attempt worker did not reach provider barrier")
+	}
+	if _, err = pool.Exec(ctx, `UPDATE recognition_jobs SET lease_until=$1
+		WHERE recognition_set_id=$2 AND role='front' AND status='running'`, now.Add(-time.Minute), raceSet.ID); err != nil {
+		t.Fatal(err)
+	}
+	claimed, err = service.RunOne(ctx, provider.Fake{})
+	if err != nil || !claimed {
+		t.Fatalf("replacement attempt was not processed: claimed=%v err=%v", claimed, err)
+	}
+	close(release)
+	if err = <-firstDone; err != nil {
+		t.Fatalf("stale attempt completion failed: %v", err)
+	}
+	requireRecognitionCount(t, ctx, pool, `SELECT count(*) FROM recognition_candidates candidate
+		JOIN capture_recognition_jobs job ON job.id=candidate.capture_recognition_job_id
+		JOIN recognition_jobs legacy ON legacy.id=job.legacy_recognition_job_id
+		WHERE legacy.recognition_set_id=$1 AND legacy.role='front'`, raceSet.ID, 2)
+	requireRecognitionCount(t, ctx, pool, `SELECT count(*) FROM capture_drafts draft
+		JOIN confirmation_drafts confirmation ON confirmation.id=draft.current_confirmation_draft_id
+		JOIN recognition_candidates candidate
+		  ON candidate.id=(confirmation.candidate_refs->>'front')::uuid
+		WHERE draft.source_recognition_set_id=$1 AND candidate.job_attempt=2`, raceSet.ID, 1)
 
 	failedSet, err := service.CreateSet(ctx, owner, []Upload{{Role: "front", Name: "front.png", DeclaredMIME: "image/png", Data: image}, {Role: "facts", Name: "facts.png", DeclaredMIME: "image/png", Data: image}, {Role: "expiry", Name: "expiry.png", DeclaredMIME: "image/png", Data: image}})
 	if err != nil {
@@ -256,6 +363,8 @@ func TestRecognitionPersistenceWorkerConfirmationAndIsolation(t *testing.T) {
 	if err != nil || deletedObjects != 3 {
 		t.Fatalf("account object cleanup failed: deleted=%d err=%v", deletedObjects, err)
 	}
+	requireRecognitionCount(t, ctx, pool, `SELECT count(*) FROM file_links
+		WHERE user_id=$1 AND link_state='active'`, other.UserID, 0)
 	objects.mu.Lock()
 	objects.items["zz-orphan/old.png"] = append([]byte(nil), image...)
 	objectCount := len(objects.items)
@@ -270,6 +379,19 @@ func TestRecognitionPersistenceWorkerConfirmationAndIsolation(t *testing.T) {
 	}
 	if orphans != 1 {
 		t.Fatalf("paginated orphan reconciliation failed: deleted=%d", orphans)
+	}
+}
+
+func requireRecognitionCount(t *testing.T, ctx context.Context, pool *pgxpool.Pool, query string, args ...any) {
+	t.Helper()
+	expected := args[len(args)-1].(int)
+	queryArgs := args[:len(args)-1]
+	var actual int
+	if err := pool.QueryRow(ctx, query, queryArgs...).Scan(&actual); err != nil {
+		t.Fatal(err)
+	}
+	if actual != expected {
+		t.Fatalf("count mismatch: got %d want %d for %s", actual, expected, query)
 	}
 }
 

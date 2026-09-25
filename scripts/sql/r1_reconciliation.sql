@@ -495,4 +495,103 @@ SELECT count(*) AS inventory_replay_mismatch_count
 FROM replay
 WHERE current_quantity <> replay_quantity;
 
+SELECT count(*) AS recognition_set_capture_mapping_violations
+FROM recognition_sets legacy
+LEFT JOIN capture_drafts draft
+  ON draft.id=legacy.capture_draft_id
+ AND draft.source_recognition_set_id=legacy.id
+ AND draft.user_id=legacy.user_id
+ AND draft.workspace_id=legacy.workspace_id
+WHERE draft.id IS NULL;
+
+SELECT count(*) AS capture_fixed_slot_violations
+FROM (
+    SELECT draft.id,count(slot.id) AS slot_count,count(DISTINCT slot.role) AS role_count
+    FROM capture_drafts draft
+    LEFT JOIN capture_slots slot ON slot.capture_draft_id=draft.id
+    GROUP BY draft.id
+) slots
+WHERE slot_count<>3 OR role_count<>3;
+
+SELECT count(*) AS legacy_capture_job_binding_violations
+FROM recognition_jobs legacy
+LEFT JOIN capture_slot_versions version
+  ON version.id=legacy.capture_slot_version_id
+ AND version.legacy_recognition_job_id=legacy.id
+ AND version.user_id=legacy.user_id
+ AND version.workspace_id=legacy.workspace_id
+LEFT JOIN capture_recognition_jobs target_job
+  ON target_job.capture_slot_version_id=version.id
+ AND target_job.legacy_recognition_job_id=legacy.id
+ AND target_job.user_id=legacy.user_id
+ AND target_job.workspace_id=legacy.workspace_id
+WHERE version.id IS NULL OR target_job.id IS NULL;
+
+SELECT count(*) AS capture_attempt_binding_violations
+FROM capture_recognition_attempts attempt
+LEFT JOIN capture_recognition_jobs job
+  ON job.id=attempt.capture_recognition_job_id
+ AND job.capture_slot_version_id=attempt.capture_slot_version_id
+ AND job.capture_draft_id=attempt.capture_draft_id
+ AND job.user_id=attempt.user_id
+ AND job.workspace_id=attempt.workspace_id
+WHERE job.id IS NULL;
+
+SELECT count(*) AS capture_evidence_binding_violations
+FROM recognition_evidence evidence
+LEFT JOIN capture_recognition_attempts attempt
+  ON attempt.capture_recognition_job_id=evidence.capture_recognition_job_id
+ AND attempt.attempt_number=evidence.job_attempt
+ AND attempt.capture_slot_version_id=evidence.capture_slot_version_id
+ AND attempt.capture_draft_id=evidence.capture_draft_id
+ AND attempt.user_id=evidence.user_id
+ AND attempt.workspace_id=evidence.workspace_id
+WHERE attempt.id IS NULL;
+
+SELECT count(*) AS capture_candidate_binding_violations
+FROM recognition_candidates candidate
+LEFT JOIN capture_recognition_attempts attempt
+  ON attempt.capture_recognition_job_id=candidate.capture_recognition_job_id
+ AND attempt.attempt_number=candidate.job_attempt
+ AND attempt.capture_slot_version_id=candidate.capture_slot_version_id
+ AND attempt.capture_draft_id=candidate.capture_draft_id
+ AND attempt.user_id=candidate.user_id
+ AND attempt.workspace_id=candidate.workspace_id
+WHERE attempt.id IS NULL;
+
+SELECT count(*) AS confirmation_current_candidate_violations
+FROM confirmation_drafts confirmation
+CROSS JOIN LATERAL jsonb_each_text(confirmation.candidate_refs) reference
+LEFT JOIN recognition_candidates candidate ON candidate.id=reference.value::uuid
+LEFT JOIN capture_slots slot
+  ON slot.capture_draft_id=confirmation.capture_draft_id AND slot.role=reference.key
+WHERE candidate.id IS NULL
+   OR candidate.capture_draft_id<>confirmation.capture_draft_id
+   OR candidate.capture_slot_version_id<>slot.current_slot_version_id;
+
+SELECT count(*) AS active_file_link_violations
+FROM file_links link
+LEFT JOIN files file
+  ON file.id=link.file_id AND file.user_id=link.user_id AND file.workspace_id=link.workspace_id
+WHERE link.link_state='active' AND (file.id IS NULL OR file.status<>'active');
+
+SELECT count(*) AS confirmed_capture_atomicity_violations
+FROM capture_drafts draft
+LEFT JOIN recognition_sets legacy
+  ON legacy.id=draft.source_recognition_set_id
+ AND legacy.user_id=draft.user_id AND legacy.workspace_id=draft.workspace_id
+LEFT JOIN confirmation_drafts confirmation
+  ON confirmation.id=draft.current_confirmation_draft_id
+ AND confirmation.capture_draft_id=draft.id
+LEFT JOIN products product
+  ON product.id=draft.confirmed_product_id
+ AND product.user_id=draft.user_id AND product.workspace_id=draft.workspace_id
+WHERE draft.status='confirmed'
+  AND (legacy.status<>'confirmed' OR confirmation.status<>'confirmed' OR product.id IS NULL);
+
+SELECT cycle_state,attempt_count,processed_count,mapped_count,unchanged_count,
+       quarantined_count,source_count,source_snapshot_hash,last_progress_at,cycle_completed_at
+FROM r1_capture_backfill_state
+WHERE singleton;
+
 COMMIT;

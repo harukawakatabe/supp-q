@@ -7,8 +7,9 @@ confirmed, and `docs/IMPLEMENTATION_PLAN_R1.md` is the current execution plan.
 The R1 platform-spine migration at `d45dae5` and E2
 Product/Profile/Ingredient migration at standalone implementation commit
 `e667a08`, plus E3 ProductPlan/ScheduleVersion at `fcc9dda`, are locally
-verified on fresh and synthetic current snapshots. E4-E6, target-read cutover,
-and every production Gate are still open.
+verified on fresh and synthetic current snapshots. E4 Capture/Evidence at
+`1cc7f0c` is also locally verified. E5-E6, independent target capture APIs/H5,
+target-read cutover, and every production Gate are still open.
 The code is still a locally accepted H5 release candidate with the deterministic supplement loop, invitation identity, private
 three-image recognition boundary, Records/product/Me surfaces, account/file
 cleanup, production Compose/Caddy, health/metrics, encrypted backup/restore
@@ -77,9 +78,10 @@ standalone clone completed `make install`, `make check`, `make test`, and
 passed client, server, and integration E2E at main commit `04538ce`. The GitHub
 API reported the repository as public on 2026-09-20. The owner selected direct
 delivery on `r1-e2-product-profile`, with no PR and no `main` merge. The current
-workflow only runs for PRs or `main` pushes, so E2/E3 evidence is local only:
+workflow only runs for PRs or `main` pushes, so E2/E3/E4 evidence is local only:
 `reports/r1/2026-09-20-s1-product-profile/README.md` and
-`reports/r1/2026-09-20-s1-product-plan/README.md`.
+`reports/r1/2026-09-20-s1-product-plan/README.md`, plus
+`reports/r1/2026-09-25-s1-capture-evidence/README.md`.
 
 ## Production path
 
@@ -141,6 +143,23 @@ workflow only runs for PRs or `main` pushes, so E2/E3 evidence is local only:
   boundary; DST gaps shift forward and folds choose the earlier instant. The
   current evaluator is a shadow component and must not be wired into Today
   before C1 comparison evidence.
+- `r1_backfill_capture_drafts_batch` is the restartable E4 set-level catch-up
+  path. It creates three stable slots but never invents a File, SlotVersion,
+  target job, attempt, evidence, or candidate for an empty role. Multiple active
+  legacy sets are quarantined rather than silently cancelled.
+- A `capture_recognition_jobs` row belongs to one SlotVersion and its attempts
+  are append-only identities. The legacy `recognition_jobs` table is only a
+  compatibility queue; never reuse another recognition set's Job to simulate a
+  replacement.
+- Candidate completion must retain the legacy terminal attempt CAS and the
+  locked current-SlotVersion check. A late attempt/result may be retained as
+  evidence but must never update the current ConfirmationDraft.
+- Legacy confirmation is atomic across Product/profile/plan/opening inventory,
+  CaptureDraft/ConfirmationDraft, media/source links, and DomainChange. It does
+  not fabricate a ClientAction because the legacy endpoint has no action ID.
+- E4 does not implement independent slot upload/replace/skip/manual APIs or H5
+  state handling. Those remain S4/S5 work. E4 Down is forbidden after
+  compatibility/target writes or replacement versions exist.
 - OTC/prescription rows remain quarantine-only and absent from ordinary APIs;
   do not add a placeholder management entry or medication-advice path.
 - `.github/workflows/ci.yml` is active in the standalone repository. Keep pnpm

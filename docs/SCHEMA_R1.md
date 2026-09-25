@@ -2,10 +2,11 @@
 
 Status: draft implementation specification; platform spine verified locally at
 `d45dae5`, E2 Product/Profile verified locally at `e667a08`, and E3
-ProductPlan/ScheduleVersion verified locally at `fcc9dda`
+ProductPlan/ScheduleVersion verified locally at `fcc9dda`; E4 Capture/Evidence
+verified locally at `1cc7f0c`
 Authority: derives from `../prd/PRD.md` sections 15–16 and does not change scope
 Migration strategy: expand → backfill → compatibility → validate → later contract
-Last updated: 2026-09-20
+Last updated: 2026-09-25
 
 ## 1. Direct conclusion
 
@@ -20,8 +21,10 @@ infrastructure and quarantine evidence. E2 migration
 facts and compatibility writes. E3 migration
 `202609200002_r1_product_plans.sql` adds ProductPlan/ScheduleVersion/DoseSlot/
 PlanStateInterval shadow facts, the occurrence identity contract, and
-compatibility writes. Legacy reads remain authoritative; these migrations do
-not mean S1 or target-read cutover is complete.
+compatibility writes. E4 migration `202609200003_r1_capture_evidence.sql` adds
+version-bound Capture/Job/Attempt/Evidence facts and atomic compatibility
+confirmation. Legacy reads remain authoritative; these migrations do not mean
+S1 or target-read cutover is complete.
 
 ## 2. Naming and storage conventions
 
@@ -237,20 +240,46 @@ to run once service-created profiles, later business versions, media links,
 deletion jobs, aggregate revisions, or target-owned catalog states are present;
 after that boundary recovery is forward-fix only.
 
-## 6. Capture and evidence — later expand group
+## 6. Capture and evidence — E4 implemented locally
 
 | Table | Role | Required constraints |
 | --- | --- | --- |
 | `capture_drafts` | Versioned add-product aggregate | One confirmation result; cancelled/confirmed terminal semantics |
 | `capture_slots` | Stable front/facts/expiry role within a draft | `(draft_id, role)` unique |
 | `capture_slot_versions` | Every upload/replace/skip/manual evidence version | `(slot_id, evidence_version)` unique; one current pointer |
+| `capture_recognition_jobs` | Target recognition lifecycle for exactly one uploaded SlotVersion | One job per SlotVersion; optional legacy-job compatibility identity |
+| `capture_recognition_attempts` | Lease/retry history for one target recognition job | `(job_id, attempt_number)` unique; immutable version binding |
 | `file_links` | Purpose-bound reference to existing `files` row | Same tenant; deletion cannot orphan an active reference |
-| `recognition_evidence` | Provider/OCR evidence separated from candidates | Bound to file + slot version + job; immutable after completion |
+| `recognition_evidence` | Provider/OCR evidence separated from candidates | Bound to file + slot version + target job/attempt; immutable after completion |
+| `recognition_candidates` | Structured provider output, not confirmed product truth | Bound to target job/attempt and SlotVersion; immutable after completion |
 | `confirmation_drafts` | Editable provider candidate vs user value | Draft version/expectedVersion required |
 
-The current `recognition_sets` path remains valid during compatibility. Target
-confirmation creates Product/profile/ingredient/schedule/opening inventory,
-source links, ClientAction, and DomainChange in one transaction.
+Every migrated or compatibility-created draft has the three fixed roles, but an
+empty role receives no invented File, SlotVersion, job, evidence, or candidate.
+An uploaded SlotVersion owns a target `capture_recognition_jobs` row; attempts
+are separate rows. The old `recognition_jobs` row is only an optional mapping,
+because its `(recognition_set_id, role)` uniqueness cannot represent v1/v2
+replacement history.
+
+OCR evidence and structured candidates are attempt-bound and append-only. A
+late candidate is always retained against its source attempt, but it may update
+the editable confirmation only after the legacy terminal CAS succeeds and only
+while its SlotVersion is still the locked current pointer. Lease reclaim and
+image replacement therefore cannot promote a stale candidate.
+
+`r1_backfill_capture_drafts_batch(size)` is cursor-based, resumable at committed
+set boundaries, idempotent, and safe to rerun for N-1 catch-up. Multiple active
+legacy sets are quarantined rather than cancelled. Deleted files require active
+links to be released first. E4 Down succeeds only for migration-owned rows and
+refuses target/compatibility writes or replacement versions with SQLSTATE
+`55000`.
+
+The current `recognition_sets` API/read path remains authoritative during
+compatibility. Its confirmation path now creates Product, profile, plan,
+opening inventory, Capture terminal state, source/media links, and DomainChange
+in one transaction. It does not invent a ClientAction for the legacy endpoint,
+which has no client action identifier. Independent per-slot target APIs, H5
+replace/skip/manual states, and target-read cutover remain S4/S5/C1 work.
 
 ## 7. Product plan and occurrence — E3 implemented locally
 
@@ -350,7 +379,7 @@ or external delivery.
 | E1 | Platform spine and quarantine registry | Unchanged | Fresh/current upgrade and constraints |
 | E2 | Product/profile/ingredient expand tables and nullable pointers | Old columns remain authoritative | Row counts, version mapping, unsupported-row quarantine |
 | E3 | Plan/timezone/occurrence expand tables | Old schedule reads remain | `VERIFIED_LOCAL` at `fcc9dda`; historical fixture, compatibility, timezone/DST and rollback guards pass |
-| E4 | Capture/evidence expand tables | Old recognition set remains | Slot-role/version mapping and late-result checks |
+| E4 | Capture/evidence expand tables | Old recognition set remains | `VERIFIED_LOCAL` at `1cc7f0c`; version-bound jobs/attempts, replacement and late-result checks pass |
 | E5 | Intake/inventory metadata and constraints | Existing transactions remain | Q1–Q3 reconciliation and concurrency tests |
 | E6 | Risk/reminder tables | Old summary remains until service switch | Revision/dedupe/retry evidence |
 | C1 | Dual-read comparison and service write cutover | Target facts become authoritative | Mismatch count zero for accepted cohort |
@@ -390,4 +419,4 @@ The platform spine is locally verified only when:
 5. invalid hashes/states/revisions are rejected by database constraints;
 6. `r1_source_inventory.sql` and `r1_reconciliation.sql` return zero critical
    violations on the fixture;
-7. status documents still say S1 is partial until E4–E6 finish.
+7. status documents still say S1 is partial until E5–E6 finish.

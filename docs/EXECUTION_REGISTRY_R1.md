@@ -3,7 +3,7 @@
 Status: active execution control
 Contract: `../prd/PRD.md`
 Plan: `IMPLEMENTATION_PLAN_R1.md`
-Last updated: 2026-09-20
+Last updated: 2026-09-25
 
 ## 1. Direct conclusion
 
@@ -19,7 +19,7 @@ and RG1 cannot pass yet:
   `sha256:25db16dbc8743ad7126889e7faef39cd3447e37b6c286e428d82a1b9af0519c7`;
 - the GitHub API reported the repository as `public` on 2026-09-20;
 - the owner selected direct development-branch delivery without a PR. Because
-  CI triggers only pull requests and pushes to `main`, the E2/E3 development
+  CI triggers only pull requests and pushes to `main`, the E2/E3/E4 development
   branch has local evidence but no hosted branch run;
 - branch protection/ruleset enforcement has not been configured and verified.
   RG1 enforcement therefore remains open.
@@ -72,7 +72,8 @@ Gate acceptance and all production promotion.
 | S1-04 | Fresh/current-snapshot migration rehearsal | `VERIFIED_LOCAL` | Synthetic Launch-Beta fixture; evidence in `../reports/r1/2026-09-19-s1-platform-spine/README.md` |
 | S1-05 | E2 Product/Profile/Ingredient expand, backfill, reconciliation, compatibility writes | `VERIFIED_LOCAL` | Implementation `e667a08`; evidence in `../reports/r1/2026-09-20-s1-product-profile/README.md` |
 | S1-06 | E3 ProductPlan/ScheduleVersion/DoseSlot/PlanStateInterval expand, backfill, evaluator, reconciliation, compatibility writes | `VERIFIED_LOCAL` | Implementation `fcc9dda`; evidence in `../reports/r1/2026-09-20-s1-product-plan/README.md`; old schedule reads remain authoritative |
-| S1-07 | E4-E6 capture/intake-inventory/risk-reminder expand groups | `NOT_STARTED` | Continue sequentially; each slice requires its own local runtime evidence |
+| S1-07 | E4 Capture/SlotVersion/RecognitionJob/Attempt/Evidence/Candidate expand, backfill, reconciliation, compatibility writes | `VERIFIED_LOCAL` | Implementation `1cc7f0c`; evidence in `../reports/r1/2026-09-25-s1-capture-evidence/README.md`; old recognition reads remain authoritative |
+| S1-08 | E5-E6 intake-inventory/risk-reminder expand groups | `NOT_STARTED` | Continue sequentially; each slice requires its own local runtime evidence |
 
 State vocabulary:
 
@@ -106,8 +107,9 @@ The next valid transition is:
 platform spine VERIFIED_LOCAL at d45dae5
 → E2 Product/Profile/Ingredient VERIFIED_LOCAL at e667a08
 → E3 ProductPlan/ScheduleVersion VERIFIED_LOCAL at fcc9dda
+→ E4 Capture/Evidence VERIFIED_LOCAL at 1cc7f0c
 → push the owner-selected development branch without PR or main merge
-→ continue E4–E6 only after each preceding evidence slice passes
+→ continue E5–E6 only after each preceding evidence slice passes
 ```
 
 Do not claim S1 complete when only the platform spine passes. S1 closes only

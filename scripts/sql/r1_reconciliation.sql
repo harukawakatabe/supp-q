@@ -594,4 +594,105 @@ SELECT cycle_state,attempt_count,processed_count,mapped_count,unchanged_count,
 FROM r1_capture_backfill_state
 WHERE singleton;
 
+SELECT count(*) AS batch_target_metadata_violations
+FROM inventory_batches
+WHERE aggregate_version IS NULL OR lifecycle_state IS NULL OR unit_snapshot IS NULL
+   OR received_quantity IS NULL OR received_at IS NULL OR expiry_precision IS NULL
+   OR currency IS NULL OR source_kind IS NULL OR updated_at IS NULL;
+
+SELECT count(*) AS intake_target_metadata_violations
+FROM intake_records
+WHERE aggregate_version IS NULL OR occurred_at IS NULL OR occurred_time_precision IS NULL
+   OR timezone_version_id IS NULL OR iana_timezone_snapshot IS NULL
+   OR product_profile_version_id IS NULL OR ingredient_profile_version_id IS NULL
+   OR history_completeness IS NULL OR source_kind IS NULL;
+
+SELECT count(*) AS intake_status_chain_violations
+FROM intake_records intake
+WHERE NOT EXISTS (
+    SELECT 1 FROM intake_status_facts fact
+    WHERE fact.intake_id=intake.id AND fact.user_id=intake.user_id
+      AND fact.workspace_id=intake.workspace_id AND fact.product_id=intake.product_id
+      AND fact.business_version=intake.aggregate_version AND fact.status=intake.status
+);
+
+SELECT count(*) AS inventory_event_metadata_violations
+FROM inventory_events
+WHERE ledger_kind IS NULL OR source_type IS NULL OR source_id IS NULL
+   OR posted_at IS NULL OR actor_user_id IS NULL
+   OR batch_version_before IS NULL OR balance_after IS NULL OR source_kind IS NULL
+   OR (ledger_kind='intake_undo' AND compensates_event_id IS NULL);
+
+SELECT count(*) AS inventory_source_identity_duplicate_violations
+FROM (
+    SELECT workspace_id,source_type,source_id,batch_id,ledger_kind
+    FROM inventory_events
+    GROUP BY workspace_id,source_type,source_id,batch_id,ledger_kind
+    HAVING count(*)<>1
+) duplicate_sources;
+
+WITH replay AS (
+    SELECT event.id,event.batch_id,event.balance_after,
+           sum(event.quantity_delta) OVER (
+               PARTITION BY event.batch_id ORDER BY event.batch_version_before,event.id
+               ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+           ) AS replay_balance
+    FROM inventory_events event
+)
+SELECT count(*) AS inventory_event_balance_snapshot_violations
+FROM replay
+WHERE balance_after<>replay_balance;
+
+WITH allocation_totals AS (
+    SELECT intake.id,intake.quantity,COALESCE(sum(allocation.quantity),0) allocated
+    FROM intake_records intake
+    LEFT JOIN intake_allocations allocation ON allocation.intake_id=intake.id
+    GROUP BY intake.id,intake.quantity
+)
+SELECT count(*) AS intake_allocation_sum_violations
+FROM allocation_totals
+WHERE quantity<>allocated;
+
+SELECT count(*) AS intake_allocation_binding_violations
+FROM intake_allocations allocation
+LEFT JOIN intake_records intake
+  ON intake.id=allocation.intake_id
+ AND intake.user_id=allocation.user_id
+ AND intake.workspace_id=allocation.workspace_id
+ AND intake.product_id=allocation.product_id
+LEFT JOIN inventory_batches batch
+  ON batch.id=allocation.batch_id
+ AND batch.user_id=allocation.user_id
+ AND batch.workspace_id=allocation.workspace_id
+ AND batch.product_id=allocation.product_id
+LEFT JOIN inventory_events event
+  ON event.id=allocation.inventory_event_id
+ AND event.intake_id=allocation.intake_id
+ AND event.batch_id=allocation.batch_id
+ AND event.user_id=allocation.user_id
+ AND event.workspace_id=allocation.workspace_id
+ AND event.product_id=allocation.product_id
+WHERE intake.id IS NULL OR batch.id IS NULL OR event.id IS NULL
+   OR allocation.batch_version_as_allocated<>event.batch_version_before
+   OR allocation.batch_balance_after<>event.balance_after
+   OR allocation.batch_balance_before-allocation.batch_balance_after<>allocation.quantity;
+
+SELECT count(*) AS intake_undo_compensation_violations
+FROM inventory_events undo_event
+LEFT JOIN inventory_events original
+  ON original.id=undo_event.compensates_event_id
+ AND original.intake_id=undo_event.intake_id
+ AND original.batch_id=undo_event.batch_id
+ AND original.user_id=undo_event.user_id
+ AND original.workspace_id=undo_event.workspace_id
+ AND original.product_id=undo_event.product_id
+ AND original.ledger_kind='intake'
+WHERE undo_event.ledger_kind='intake_undo'
+  AND (original.id IS NULL OR original.quantity_delta<>-undo_event.quantity_delta);
+
+SELECT cycle_state,phase,attempt_count,processed_count,source_count,
+       source_snapshot_hash,cycle_started_at,last_progress_at,last_completed_at,updated_at
+FROM r1_intake_inventory_backfill_state
+WHERE singleton;
+
 COMMIT;

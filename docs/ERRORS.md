@@ -30,6 +30,7 @@ Every error response uses:
 | `invalid_intake` | 400 | Intake date, time, source, quantity, or idempotency key is invalid. |
 | `invalid_date` | 400 | Today/record-range dates are invalid, reversed, or exceed 366 days. |
 | `insufficient_inventory` | 409 | Full requested intake cannot be allocated; no partial mutation is committed. |
+| `idempotency_conflict` | 409 | The same intake idempotency key was reused with a different normalized request; no new side effect is committed. |
 | `invalid_upload` | 400 | Exactly three valid JPEG, PNG, or WebP label images were not supplied within the size limits. |
 | `recognition_processing` | 409 | Confirmation was attempted before all recognition jobs reached a terminal state. |
 | `recognition_cancelled` | 410 | A cancelled recognition set cannot be confirmed. |

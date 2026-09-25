@@ -9,6 +9,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"suppq.local/server/internal/catalog"
 )
 
 type fakeDatabase struct{ err error }
@@ -116,5 +118,20 @@ func TestAuthenticationEndpointsHaveIPRateLimit(t *testing.T) {
 	}
 	if last == nil || last.Code != http.StatusTooManyRequests || last.Header().Get("Retry-After") != "60" {
 		t.Fatalf("expected auth IP throttling, got %+v", last)
+	}
+}
+
+func TestIdempotencyConflictIsHTTPConflict(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/intakes", nil)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	writeApplicationError(recorder, request, logger,
+		catalog.NewError("idempotency_conflict", "同一个幂等键不能用于不同的服用请求。"))
+
+	if recorder.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d", recorder.Code)
+	}
+	if !strings.Contains(recorder.Body.String(), `"code":"idempotency_conflict"`) {
+		t.Fatalf("unexpected error body: %s", recorder.Body.String())
 	}
 }

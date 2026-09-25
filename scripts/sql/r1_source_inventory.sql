@@ -269,4 +269,51 @@ SELECT cycle_state,attempt_count,processed_count,mapped_count,unchanged_count,
 FROM r1_capture_backfill_state
 WHERE singleton;
 
+SELECT required.table_name,
+       to_regclass(current_schema() || '.' || required.table_name) IS NOT NULL AS present
+FROM (VALUES
+    ('intake_status_facts'),
+    ('r1_intake_inventory_backfill_state')
+) AS required(table_name)
+ORDER BY required.table_name;
+
+SELECT
+    count(*) FILTER (WHERE aggregate_version IS NULL) AS batches_without_version,
+    count(*) FILTER (WHERE lifecycle_state IS NULL) AS batches_without_lifecycle,
+    count(*) FILTER (WHERE unit_snapshot IS NULL) AS batches_without_unit_snapshot,
+    count(*) FILTER (WHERE received_quantity IS NULL) AS batches_without_received_quantity,
+    count(*) FILTER (WHERE expiry_precision IS NULL) AS batches_without_expiry_precision,
+    count(*) FILTER (WHERE currency IS NULL) AS batches_without_currency
+FROM inventory_batches;
+
+SELECT
+    count(*) FILTER (WHERE aggregate_version IS NULL) AS intakes_without_version,
+    count(*) FILTER (WHERE occurred_at IS NULL) AS intakes_without_occurred_at,
+    count(*) FILTER (WHERE timezone_version_id IS NULL) AS intakes_without_timezone,
+    count(*) FILTER (WHERE product_profile_version_id IS NULL) AS intakes_without_product_snapshot,
+    count(*) FILTER (WHERE ingredient_profile_version_id IS NULL) AS intakes_without_ingredient_snapshot,
+    count(*) FILTER (WHERE history_completeness IS NULL) AS intakes_without_completeness
+FROM intake_records;
+
+SELECT
+    count(*) FILTER (WHERE ledger_kind IS NULL) AS events_without_ledger_kind,
+    count(*) FILTER (WHERE source_type IS NULL OR source_id IS NULL) AS events_without_source_identity,
+    count(*) FILTER (WHERE posted_at IS NULL) AS events_without_posted_at,
+    count(*) FILTER (WHERE batch_version_before IS NULL OR balance_after IS NULL) AS events_without_balance_snapshot,
+    count(*) FILTER (WHERE ledger_kind='intake_undo' AND compensates_event_id IS NULL) AS undo_without_compensation
+FROM inventory_events;
+
+SELECT
+    count(*) FILTER (WHERE user_id IS NULL OR workspace_id IS NULL OR product_id IS NULL) AS allocations_without_owner,
+    count(*) FILTER (WHERE inventory_event_id IS NULL) AS allocations_without_event,
+    count(*) FILTER (WHERE batch_version_as_allocated IS NULL) AS allocations_without_batch_version,
+    count(*) FILTER (WHERE batch_balance_before IS NULL OR batch_balance_after IS NULL) AS allocations_without_balance_snapshot,
+    count(*) FILTER (WHERE unit_snapshot IS NULL) AS allocations_without_unit_snapshot
+FROM intake_allocations;
+
+SELECT cycle_state,phase,attempt_count,processed_count,source_count,
+       source_snapshot_hash,cycle_started_at,last_progress_at,last_completed_at,updated_at
+FROM r1_intake_inventory_backfill_state
+WHERE singleton;
+
 COMMIT;

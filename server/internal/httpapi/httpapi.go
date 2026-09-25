@@ -780,7 +780,7 @@ func writeApplicationError(w http.ResponseWriter, r *http.Request, logger *slog.
 		switch code {
 		case "resource_not_found":
 			status = http.StatusNotFound
-		case "insufficient_inventory":
+		case "insufficient_inventory", "idempotency_conflict":
 			status = http.StatusConflict
 		case "invalid_product", "invalid_schedule", "invalid_batch", "invalid_ingredient", "invalid_intake", "invalid_date":
 			status = http.StatusBadRequest

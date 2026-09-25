@@ -197,12 +197,37 @@ func TestCatalogInventoryLifecycleAndIsolation(t *testing.T) {
 	if len(intake.Allocations) != 2 || intake.Allocations[0].Quantity != 2 || intake.Allocations[1].Quantity != 1 {
 		t.Fatalf("expected FEFO split 2+1, got %+v", intake.Allocations)
 	}
-	duplicate, duplicateProduct, err := service.CreateIntake(ctx, owner, CreateIntakeInput{ProductID: product.ID, Date: "2026-08-02", Time: "22:30", Quantity: 3, Source: "scheduled"}, "test-intake-1")
+	assertCatalogCount(t, ctx, pool, `
+		SELECT count(*)
+		FROM intake_allocations a
+		JOIN inventory_events e ON e.id=a.inventory_event_id
+		WHERE a.intake_id=$1
+		  AND a.user_id=$2 AND a.workspace_id=$3 AND a.product_id=$4
+		  AND a.allocation_mode='fefo_auto'
+		  AND a.batch_version_as_allocated=e.batch_version_before
+		  AND a.batch_balance_before-a.batch_balance_after=a.quantity
+		  AND e.ledger_kind='intake' AND e.source_type='intake'
+		  AND e.source_id=$1 AND e.balance_after=a.batch_balance_after
+		  AND e.request_hash IS NOT NULL AND e.source_kind='application_current'`,
+		2, intake.ID, owner.UserID, owner.WorkspaceID, product.ID)
+	assertCatalogCount(t, ctx, pool, `
+		WITH replay AS (
+			SELECT b.id,b.current_quantity,COALESCE(sum(e.quantity_delta),0) replay_quantity
+			FROM inventory_batches b LEFT JOIN inventory_events e ON e.batch_id=b.id
+			WHERE b.product_id=$1 GROUP BY b.id,b.current_quantity
+		)
+		SELECT count(*) FROM replay WHERE current_quantity<>replay_quantity`, 0, product.ID)
+	duplicate, duplicateProduct, err := service.CreateIntake(ctx, owner, CreateIntakeInput{ProductID: product.ID, Date: "2026-08-02", Time: "22:30", Quantity: 3, Source: "scheduled", Note: "随餐"}, "test-intake-1")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if duplicate.ID != intake.ID || duplicateProduct.CurrentQuantity != 3 {
 		t.Fatal("idempotent replay changed inventory")
+	}
+	if _, _, err = service.CreateIntake(ctx, owner, CreateIntakeInput{ProductID: product.ID, Date: "2026-08-02", Time: "22:30", Quantity: 2, Source: "scheduled", Note: "随餐"}, "test-intake-1"); err == nil {
+		t.Fatal("same idempotency key accepted a different normalized request")
+	} else if applicationErr, ok := err.(*Error); !ok || applicationErr.Code != "idempotency_conflict" {
+		t.Fatalf("expected idempotency_conflict, got %v", err)
 	}
 	if _, _, err = service.CreateIntake(ctx, owner, CreateIntakeInput{ProductID: product.ID, Date: "2026-08-02", Quantity: 4, Source: "ad_hoc"}, "too-large"); !errors.Is(err, ErrInsufficientInventory) {
 		t.Fatalf("expected atomic inventory rejection, got %v", err)
@@ -222,6 +247,19 @@ func TestCatalogInventoryLifecycleAndIsolation(t *testing.T) {
 	if revoked.Status != "revoked" || restored.CurrentQuantity != 6 {
 		t.Fatalf("undo did not restore exact inventory: %+v %v", revoked, restored.CurrentQuantity)
 	}
+	assertCatalogCount(t, ctx, pool, `
+		SELECT count(*)
+		FROM inventory_events undo_event
+		JOIN inventory_events original ON original.id=undo_event.compensates_event_id
+		WHERE undo_event.intake_id=$1 AND undo_event.ledger_kind='intake_undo'
+		  AND original.intake_id=undo_event.intake_id
+		  AND original.batch_id=undo_event.batch_id
+		  AND original.ledger_kind='intake'
+		  AND original.quantity_delta=-undo_event.quantity_delta`, 2, intake.ID)
+	assertCatalogCount(t, ctx, pool, `
+		SELECT count(*) FROM intake_status_facts
+		WHERE intake_id=$1 AND status IN ('active','revoked')
+		  AND source_kind='application_current'`, 2, intake.ID)
 	_, restoredAgain, err := service.UndoIntake(ctx, owner, intake.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -229,6 +267,16 @@ func TestCatalogInventoryLifecycleAndIsolation(t *testing.T) {
 	if restoredAgain.CurrentQuantity != 6 {
 		t.Fatal("repeated undo changed inventory")
 	}
+	assertCatalogCount(t, ctx, pool, `
+		SELECT count(*) FROM inventory_events
+		WHERE intake_id=$1 AND ledger_kind='intake_undo'`, 2, intake.ID)
+	assertCatalogCount(t, ctx, pool, `
+		WITH replay AS (
+			SELECT b.id,b.current_quantity,COALESCE(sum(e.quantity_delta),0) replay_quantity
+			FROM inventory_batches b LEFT JOIN inventory_events e ON e.batch_id=b.id
+			WHERE b.product_id=$1 GROUP BY b.id,b.current_quantity
+		)
+		SELECT count(*) FROM replay WHERE current_quantity<>replay_quantity`, 0, product.ID)
 	records, err := service.ListIntakes(ctx, owner, "2026-08-01", "2026-08-31")
 	if err != nil {
 		t.Fatal(err)
@@ -243,6 +291,68 @@ func TestCatalogInventoryLifecycleAndIsolation(t *testing.T) {
 	if _, _, err = service.UndoIntake(ctx, other, intake.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("cross-tenant undo must be hidden, got %v", err)
 	}
+
+	type concurrentResult struct {
+		intake  Intake
+		product Product
+		err     error
+	}
+	const concurrentRequests = 8
+	start := make(chan struct{})
+	results := make(chan concurrentResult, concurrentRequests)
+	for index := 0; index < concurrentRequests; index++ {
+		go func() {
+			<-start
+			created, current, createErr := service.CreateIntake(ctx, owner, CreateIntakeInput{
+				ProductID: product.ID, Date: "2026-08-02", Time: "21:15",
+				Quantity: 1, Source: "ad_hoc", Note: "并发重试",
+			}, "concurrent-intake")
+			results <- concurrentResult{intake: created, product: current, err: createErr}
+		}()
+	}
+	close(start)
+	var concurrentIntakeID string
+	for index := 0; index < concurrentRequests; index++ {
+		result := <-results
+		if result.err != nil {
+			t.Fatalf("concurrent idempotent intake failed: %v", result.err)
+		}
+		if concurrentIntakeID == "" {
+			concurrentIntakeID = result.intake.ID
+		}
+		if result.intake.ID != concurrentIntakeID || result.product.CurrentQuantity != 5 {
+			t.Fatalf("concurrent retry diverged: intake=%s product=%v", result.intake.ID, result.product.CurrentQuantity)
+		}
+	}
+	assertCatalogCount(t, ctx, pool, `
+		SELECT count(*) FROM inventory_events
+		WHERE intake_id=$1 AND ledger_kind='intake'`, 1, concurrentIntakeID)
+	assertCatalogCount(t, ctx, pool, `
+		SELECT count(*) FROM intake_records
+		WHERE idempotency_key='concurrent-intake'`, 1)
+
+	undoStart := make(chan struct{})
+	undoResults := make(chan concurrentResult, concurrentRequests)
+	for index := 0; index < concurrentRequests; index++ {
+		go func() {
+			<-undoStart
+			revokedIntake, current, undoErr := service.UndoIntake(ctx, owner, concurrentIntakeID)
+			undoResults <- concurrentResult{intake: revokedIntake, product: current, err: undoErr}
+		}()
+	}
+	close(undoStart)
+	for index := 0; index < concurrentRequests; index++ {
+		result := <-undoResults
+		if result.err != nil {
+			t.Fatalf("concurrent exact undo failed: %v", result.err)
+		}
+		if result.intake.Status != "revoked" || result.product.CurrentQuantity != 6 {
+			t.Fatalf("concurrent exact undo diverged: status=%s quantity=%v", result.intake.Status, result.product.CurrentQuantity)
+		}
+	}
+	assertCatalogCount(t, ctx, pool, `
+		SELECT count(*) FROM inventory_events
+		WHERE intake_id=$1 AND ledger_kind='intake_undo'`, 1, concurrentIntakeID)
 
 	today, err := service.Today(ctx, owner, "2026-08-02")
 	if err != nil {

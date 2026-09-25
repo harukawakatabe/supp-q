@@ -3,7 +3,9 @@ package catalog
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -214,6 +216,33 @@ func newUUID() (string, error) {
 	return fmt.Sprintf("%s-%s-%s-%s-%s", hex.EncodeToString(value[:4]), hex.EncodeToString(value[4:6]), hex.EncodeToString(value[6:8]), hex.EncodeToString(value[8:10]), hex.EncodeToString(value[10:])), nil
 }
 
+func canonicalRequestHash(value any) (string, error) {
+	payload, err := json.Marshal(value)
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256(payload)
+	return hex.EncodeToString(digest[:]), nil
+}
+
+func intakeRequestHash(input CreateIntakeInput, date time.Time, quantity core.Quantity) (string, error) {
+	return canonicalRequestHash(struct {
+		ProductID string `json:"productId"`
+		Date      string `json:"date"`
+		Time      string `json:"time"`
+		Quantity  string `json:"quantity"`
+		Source    string `json:"source"`
+		Note      string `json:"note"`
+	}{
+		ProductID: input.ProductID,
+		Date:      core.DateKey(date),
+		Time:      input.Time,
+		Quantity:  quantity.DatabaseString(),
+		Source:    input.Source,
+		Note:      input.Note,
+	})
+}
+
 func normalizeCreate(input CreateProductInput, now time.Time) (CreateProductInput, core.Schedule, error) {
 	input.Name = strings.TrimSpace(input.Name)
 	input.Brand = strings.TrimSpace(input.Brand)
@@ -412,10 +441,10 @@ func (service *Service) createProductTx(ctx context.Context, tx pgx.Tx, scope Sc
 		parsed, _ := core.ParseDate(input.OpeningBatch.ExpiryDate)
 		expiry = parsed
 	}
-	if _, err = tx.Exec(ctx, `INSERT INTO inventory_batches (id,user_id,workspace_id,product_id,initial_quantity,current_quantity,expiry_date,price_cny,ingredient_profile_version_id,created_at) VALUES ($1,$2,$3,$4,$5,$5,$6,$7,$8,$9)`, batchID, scope.UserID, scope.WorkspaceID, productID, opening.DatabaseString(), expiry, input.OpeningBatch.PriceCNY, ingredientProfileID, now); err != nil {
+	if _, err = tx.Exec(ctx, `INSERT INTO inventory_batches (id,user_id,workspace_id,product_id,initial_quantity,current_quantity,expiry_date,price_cny,ingredient_profile_version_id,source_kind,created_at) VALUES ($1,$2,$3,$4,$5,$5,$6,$7,$8,'application_current',$9)`, batchID, scope.UserID, scope.WorkspaceID, productID, opening.DatabaseString(), expiry, input.OpeningBatch.PriceCNY, ingredientProfileID, now); err != nil {
 		return "", err
 	}
-	if _, err = tx.Exec(ctx, `INSERT INTO inventory_events (id,user_id,workspace_id,product_id,batch_id,kind,quantity_delta,created_at) VALUES ($1,$2,$3,$4,$5,'opening',$6,$7)`, eventID, scope.UserID, scope.WorkspaceID, productID, batchID, opening.DatabaseString(), now); err != nil {
+	if _, err = tx.Exec(ctx, `INSERT INTO inventory_events (id,user_id,workspace_id,product_id,batch_id,kind,ledger_kind,source_type,source_id,actor_user_id,batch_version_before,balance_after,source_kind,quantity_delta,posted_at,created_at) VALUES ($1,$2,$3,$4,$5,'opening','opening','batch',$5,$2,0,$6,'application_current',$6,$7,$7)`, eventID, scope.UserID, scope.WorkspaceID, productID, batchID, opening.DatabaseString(), now); err != nil {
 		return "", err
 	}
 	return productID, nil
@@ -1057,10 +1086,10 @@ func (service *Service) AddBatch(ctx context.Context, scope Scope, productID str
 		return Product{}, err
 	}
 	now := service.now()
-	if _, err = tx.Exec(ctx, `INSERT INTO inventory_batches (id,user_id,workspace_id,product_id,initial_quantity,current_quantity,expiry_date,price_cny,ingredient_profile_version_id,created_at) VALUES ($1,$2,$3,$4,$5,$5,$6,$7,$8,$9)`, batchID, scope.UserID, scope.WorkspaceID, productID, quantity.DatabaseString(), expiry, input.PriceCNY, ingredientProfileID, now); err != nil {
+	if _, err = tx.Exec(ctx, `INSERT INTO inventory_batches (id,user_id,workspace_id,product_id,initial_quantity,current_quantity,expiry_date,price_cny,ingredient_profile_version_id,source_kind,created_at) VALUES ($1,$2,$3,$4,$5,$5,$6,$7,$8,'application_current',$9)`, batchID, scope.UserID, scope.WorkspaceID, productID, quantity.DatabaseString(), expiry, input.PriceCNY, ingredientProfileID, now); err != nil {
 		return Product{}, err
 	}
-	if _, err = tx.Exec(ctx, `INSERT INTO inventory_events (id,user_id,workspace_id,product_id,batch_id,kind,quantity_delta,created_at) VALUES ($1,$2,$3,$4,$5,'restock',$6,$7)`, eventID, scope.UserID, scope.WorkspaceID, productID, batchID, quantity.DatabaseString(), now); err != nil {
+	if _, err = tx.Exec(ctx, `INSERT INTO inventory_events (id,user_id,workspace_id,product_id,batch_id,kind,ledger_kind,source_type,source_id,actor_user_id,batch_version_before,balance_after,source_kind,quantity_delta,posted_at,created_at) VALUES ($1,$2,$3,$4,$5,'restock','restock','batch',$5,$2,0,$6,'application_current',$6,$7,$7)`, eventID, scope.UserID, scope.WorkspaceID, productID, batchID, quantity.DatabaseString(), now); err != nil {
 		return Product{}, err
 	}
 	if _, err = tx.Exec(ctx, `UPDATE products SET status=CASE WHEN status='depleted' THEN 'active' ELSE status END,updated_at=$1 WHERE id=$2`, now, productID); err != nil {
@@ -1099,6 +1128,10 @@ func (service *Service) CreateIntake(ctx context.Context, scope Scope, input Cre
 		}
 		intakeTime = parsed
 	}
+	requestHash, err := intakeRequestHash(input, date, quantity)
+	if err != nil {
+		return Intake{}, Product{}, err
+	}
 	tx, err := service.pool.Begin(ctx)
 	if err != nil {
 		return Intake{}, Product{}, err
@@ -1109,9 +1142,29 @@ func (service *Service) CreateIntake(ctx context.Context, scope Scope, input Cre
 		if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, lockKey); err != nil {
 			return Intake{}, Product{}, err
 		}
-		var existingID string
-		lookupErr := tx.QueryRow(ctx, `SELECT id FROM intake_records WHERE user_id=$1 AND workspace_id=$2 AND idempotency_key=$3`, scope.UserID, scope.WorkspaceID, idempotencyKey).Scan(&existingID)
+		var existingID, existingProductID, existingDate, existingTime, existingQuantity, existingSource, existingNote, existingHash string
+		lookupErr := tx.QueryRow(ctx, `SELECT id,product_id,to_char(intake_date,'YYYY-MM-DD'),COALESCE(to_char(intake_time,'HH24:MI'),''),quantity::text,source,note,COALESCE(request_hash,'') FROM intake_records WHERE user_id=$1 AND workspace_id=$2 AND idempotency_key=$3`, scope.UserID, scope.WorkspaceID, idempotencyKey).Scan(&existingID, &existingProductID, &existingDate, &existingTime, &existingQuantity, &existingSource, &existingNote, &existingHash)
 		if lookupErr == nil {
+			if existingHash == "" {
+				existingDateValue, parseErr := core.ParseDate(existingDate)
+				if parseErr != nil {
+					return Intake{}, Product{}, parseErr
+				}
+				existingQuantityValue, parseErr := core.ParseQuantity(existingQuantity)
+				if parseErr != nil {
+					return Intake{}, Product{}, parseErr
+				}
+				existingHash, parseErr = intakeRequestHash(CreateIntakeInput{
+					ProductID: existingProductID, Date: existingDate, Time: existingTime,
+					Quantity: existingQuantityValue.Float64(), Source: existingSource, Note: existingNote,
+				}, existingDateValue, existingQuantityValue)
+				if parseErr != nil {
+					return Intake{}, Product{}, parseErr
+				}
+			}
+			if existingHash != requestHash {
+				return Intake{}, Product{}, NewError("idempotency_conflict", "同一个幂等键不能用于不同的服用请求。")
+			}
 			intake, loadErr := loadIntake(ctx, tx, scope, existingID)
 			if loadErr != nil {
 				return Intake{}, Product{}, loadErr
@@ -1129,7 +1182,7 @@ func (service *Service) CreateIntake(ctx context.Context, scope Scope, input Cre
 			return Intake{}, Product{}, lookupErr
 		}
 	}
-	intakeID, err := service.createIntakeTx(ctx, tx, scope, input, date, intakeTime, quantity, idempotencyKey, service.now())
+	intakeID, err := service.createIntakeTx(ctx, tx, scope, input, date, intakeTime, quantity, idempotencyKey, requestHash, service.now())
 	if err != nil {
 		return Intake{}, Product{}, err
 	}
@@ -1147,7 +1200,7 @@ func (service *Service) CreateIntake(ctx context.Context, scope Scope, input Cre
 	return intake, product, nil
 }
 
-func (service *Service) createIntakeTx(ctx context.Context, tx pgx.Tx, scope Scope, input CreateIntakeInput, date time.Time, intakeTime any, quantity core.Quantity, idempotencyKey string, now time.Time) (string, error) {
+func (service *Service) createIntakeTx(ctx context.Context, tx pgx.Tx, scope Scope, input CreateIntakeInput, date time.Time, intakeTime any, quantity core.Quantity, idempotencyKey, requestHash string, now time.Time) (string, error) {
 	var productID string
 	if err := tx.QueryRow(ctx, `SELECT id FROM products WHERE id=$1 AND user_id=$2 AND workspace_id=$3 AND product_type='supplement' AND status<>'archived' FOR UPDATE`, input.ProductID, scope.UserID, scope.WorkspaceID).Scan(&productID); errors.Is(err, pgx.ErrNoRows) {
 		return "", ErrNotFound
@@ -1201,25 +1254,36 @@ func (service *Service) createIntakeTx(ctx context.Context, tx pgx.Tx, scope Sco
 	if idempotencyKey != "" {
 		key = idempotencyKey
 	}
-	if _, err = tx.Exec(ctx, `INSERT INTO intake_records (id,user_id,workspace_id,product_id,intake_date,intake_time,quantity,source,status,idempotency_key,note,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'active',$9,$10,$11)`, intakeID, scope.UserID, scope.WorkspaceID, productID, date, intakeTime, quantity.DatabaseString(), input.Source, key, input.Note, now); err != nil {
+	if _, err = tx.Exec(ctx, `INSERT INTO intake_records (id,user_id,workspace_id,product_id,intake_date,intake_time,quantity,source,status,idempotency_key,request_hash,note,history_completeness,source_kind,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'active',$9,$10,$11,'complete','application_current',$12)`, intakeID, scope.UserID, scope.WorkspaceID, productID, date, intakeTime, quantity.DatabaseString(), input.Source, key, requestHash, input.Note, now); err != nil {
+		return "", err
+	}
+	var occurredAt time.Time
+	if err = tx.QueryRow(ctx, `SELECT occurred_at FROM intake_records WHERE id=$1`, intakeID).Scan(&occurredAt); err != nil {
 		return "", err
 	}
 	for _, allocation := range allocations {
-		result, updateErr := tx.Exec(ctx, `UPDATE inventory_batches SET current_quantity=current_quantity-$1 WHERE id=$2 AND user_id=$3 AND workspace_id=$4 AND current_quantity>=$1`, allocation.Quantity.DatabaseString(), allocation.BatchID, scope.UserID, scope.WorkspaceID)
+		var batchVersion int64
+		var balanceAfter, unitSnapshot, ingredientProfileID string
+		updateErr := tx.QueryRow(ctx, `UPDATE inventory_batches SET current_quantity=current_quantity-$1,updated_at=$5 WHERE id=$2 AND user_id=$3 AND workspace_id=$4 AND current_quantity>=$1 RETURNING aggregate_version,current_quantity::text,unit_snapshot,ingredient_profile_version_id`, allocation.Quantity.DatabaseString(), allocation.BatchID, scope.UserID, scope.WorkspaceID, now).Scan(&batchVersion, &balanceAfter, &unitSnapshot, &ingredientProfileID)
+		if errors.Is(updateErr, pgx.ErrNoRows) {
+			return "", ErrInsufficientInventory
+		}
 		if updateErr != nil {
 			return "", updateErr
 		}
-		if result.RowsAffected() != 1 {
-			return "", ErrInsufficientInventory
+		balanceAfterQuantity, parseErr := core.ParseQuantity(balanceAfter)
+		if parseErr != nil {
+			return "", parseErr
 		}
-		if _, err = tx.Exec(ctx, `INSERT INTO intake_allocations (intake_id,batch_id,quantity,unit_cost_cny) VALUES ($1,$2,$3,$4)`, intakeID, allocation.BatchID, allocation.Quantity.DatabaseString(), allocation.UnitCostCNY); err != nil {
-			return "", err
-		}
+		balanceBefore := balanceAfterQuantity + allocation.Quantity
 		eventID, createErr := newUUID()
 		if createErr != nil {
 			return "", createErr
 		}
-		if _, err = tx.Exec(ctx, `INSERT INTO inventory_events (id,user_id,workspace_id,product_id,batch_id,intake_id,kind,quantity_delta,created_at) VALUES ($1,$2,$3,$4,$5,$6,'intake',$7,$8)`, eventID, scope.UserID, scope.WorkspaceID, productID, allocation.BatchID, intakeID, (-allocation.Quantity).DatabaseString(), now); err != nil {
+		if _, err = tx.Exec(ctx, `INSERT INTO inventory_events (id,user_id,workspace_id,product_id,batch_id,intake_id,kind,ledger_kind,source_type,source_id,source_request_key,request_hash,occurred_at,actor_user_id,batch_version_before,balance_after,source_kind,quantity_delta,posted_at,created_at) VALUES ($1,$2,$3,$4,$5,$6,'intake','intake','intake',$6,$7,$8,$9,$2,$10,$11,'application_current',$12,$13,$13)`, eventID, scope.UserID, scope.WorkspaceID, productID, allocation.BatchID, intakeID, key, requestHash, occurredAt, batchVersion-1, balanceAfter, (-allocation.Quantity).DatabaseString(), now); err != nil {
+			return "", err
+		}
+		if _, err = tx.Exec(ctx, `INSERT INTO intake_allocations (intake_id,batch_id,quantity,unit_cost_cny,user_id,workspace_id,product_id,allocation_mode,inventory_event_id,batch_version_as_allocated,batch_balance_before,batch_balance_after,unit_snapshot,ingredient_profile_version_id,source_kind) VALUES ($1,$2,$3,$4,$5,$6,$7,'fefo_auto',$8,$9,$10,$11,$12,$13,'application_current')`, intakeID, allocation.BatchID, allocation.Quantity.DatabaseString(), allocation.UnitCostCNY, scope.UserID, scope.WorkspaceID, productID, eventID, batchVersion-1, balanceBefore.DatabaseString(), balanceAfter, unitSnapshot, ingredientProfileID); err != nil {
 			return "", err
 		}
 	}
@@ -1246,7 +1310,7 @@ func loadIntake(ctx context.Context, db dbtx, scope Scope, id string) (Intake, e
 		return Intake{}, err
 	}
 	intake.Date, intake.Time, intake.Quantity = core.DateKey(date), timeText, quantity.Float64()
-	rows, err := db.Query(ctx, `SELECT ia.batch_id,ia.quantity::text,ia.unit_cost_cny::text FROM intake_allocations ia JOIN inventory_batches b ON b.id=ia.batch_id WHERE ia.intake_id=$1 AND b.user_id=$2 AND b.workspace_id=$3 ORDER BY b.created_at`, id, scope.UserID, scope.WorkspaceID)
+	rows, err := db.Query(ctx, `SELECT ia.batch_id,ia.quantity::text,ia.unit_cost_cny::text FROM intake_allocations ia JOIN inventory_batches b ON b.id=ia.batch_id WHERE ia.intake_id=$1 AND b.user_id=$2 AND b.workspace_id=$3 ORDER BY b.expiry_date ASC NULLS LAST,b.created_at,b.id`, id, scope.UserID, scope.WorkspaceID)
 	if err != nil {
 		return Intake{}, err
 	}
@@ -1327,19 +1391,20 @@ func (service *Service) UndoIntake(ctx context.Context, scope Scope, id string) 
 		return Intake{}, Product{}, err
 	}
 	if status == "active" {
-		rows, queryErr := tx.Query(ctx, `SELECT ia.batch_id,ia.quantity::text FROM intake_allocations ia JOIN inventory_batches b ON b.id=ia.batch_id WHERE ia.intake_id=$1 AND b.user_id=$2 AND b.workspace_id=$3 ORDER BY b.id FOR UPDATE OF b`, id, scope.UserID, scope.WorkspaceID)
+		rows, queryErr := tx.Query(ctx, `SELECT ia.batch_id,ia.quantity::text,ia.inventory_event_id FROM intake_allocations ia JOIN inventory_batches b ON b.id=ia.batch_id WHERE ia.intake_id=$1 AND b.user_id=$2 AND b.workspace_id=$3 ORDER BY b.id FOR UPDATE OF b`, id, scope.UserID, scope.WorkspaceID)
 		if queryErr != nil {
 			return Intake{}, Product{}, queryErr
 		}
 		type restoration struct {
-			batchID  string
-			quantity core.Quantity
+			batchID         string
+			quantity        core.Quantity
+			originalEventID *string
 		}
 		restores := []restoration{}
 		for rows.Next() {
 			var item restoration
 			var quantityText string
-			if queryErr = rows.Scan(&item.batchID, &quantityText); queryErr != nil {
+			if queryErr = rows.Scan(&item.batchID, &quantityText, &item.originalEventID); queryErr != nil {
 				rows.Close()
 				return Intake{}, Product{}, queryErr
 			}
@@ -1356,19 +1421,28 @@ func (service *Service) UndoIntake(ctx context.Context, scope Scope, id string) 
 			return Intake{}, Product{}, queryErr
 		}
 		now := service.now()
+		undoRequestHash, hashErr := canonicalRequestHash(struct {
+			Action   string `json:"action"`
+			IntakeID string `json:"intakeId"`
+		}{Action: "undo", IntakeID: id})
+		if hashErr != nil {
+			return Intake{}, Product{}, hashErr
+		}
 		for _, item := range restores {
-			result, updateErr := tx.Exec(ctx, `UPDATE inventory_batches SET current_quantity=current_quantity+$1 WHERE id=$2 AND user_id=$3 AND workspace_id=$4 AND current_quantity+$1<=initial_quantity`, item.quantity.DatabaseString(), item.batchID, scope.UserID, scope.WorkspaceID)
+			var batchVersion int64
+			var balanceAfter string
+			updateErr := tx.QueryRow(ctx, `UPDATE inventory_batches SET current_quantity=current_quantity+$1,updated_at=$5 WHERE id=$2 AND user_id=$3 AND workspace_id=$4 RETURNING aggregate_version,current_quantity::text`, item.quantity.DatabaseString(), item.batchID, scope.UserID, scope.WorkspaceID, now).Scan(&batchVersion, &balanceAfter)
+			if errors.Is(updateErr, pgx.ErrNoRows) {
+				return Intake{}, Product{}, ErrNotFound
+			}
 			if updateErr != nil {
 				return Intake{}, Product{}, updateErr
-			}
-			if result.RowsAffected() != 1 {
-				return Intake{}, Product{}, fmt.Errorf("restore would exceed initial quantity")
 			}
 			eventID, createErr := newUUID()
 			if createErr != nil {
 				return Intake{}, Product{}, createErr
 			}
-			if _, updateErr = tx.Exec(ctx, `INSERT INTO inventory_events (id,user_id,workspace_id,product_id,batch_id,intake_id,kind,quantity_delta,created_at) VALUES ($1,$2,$3,$4,$5,$6,'undo',$7,$8)`, eventID, scope.UserID, scope.WorkspaceID, productID, item.batchID, id, item.quantity.DatabaseString(), now); updateErr != nil {
+			if _, updateErr = tx.Exec(ctx, `INSERT INTO inventory_events (id,user_id,workspace_id,product_id,batch_id,intake_id,kind,ledger_kind,source_type,source_id,source_request_key,request_hash,actor_user_id,batch_version_before,balance_after,compensates_event_id,source_kind,quantity_delta,posted_at,created_at) VALUES ($1,$2,$3,$4,$5,$6,'undo','intake_undo','intake_undo',$6,$7,$8,$2,$9,$10,$11,'application_current',$12,$13,$13)`, eventID, scope.UserID, scope.WorkspaceID, productID, item.batchID, id, "undo:"+id, undoRequestHash, batchVersion-1, balanceAfter, item.originalEventID, item.quantity.DatabaseString(), now); updateErr != nil {
 				return Intake{}, Product{}, updateErr
 			}
 		}

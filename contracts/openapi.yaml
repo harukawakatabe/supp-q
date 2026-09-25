@@ -197,7 +197,7 @@ paths:
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/CreateIntake" } } } }
       responses:
         "201": { description: Intake and exact FEFO allocation committed atomically, content: { application/json: { schema: { $ref: "#/components/schemas/IntakeMutation" } } } }
-        "409": { description: Insufficient inventory; no partial mutation occurs }
+        "409": { description: Insufficient inventory or changed-payload reuse of an existing idempotency key; no new partial or duplicate mutation occurs }
   /intakes/{intakeId}:
     delete:
       operationId: undoIntake

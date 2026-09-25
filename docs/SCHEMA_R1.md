@@ -3,10 +3,11 @@
 Status: draft implementation specification; platform spine verified locally at
 `d45dae5`, E2 Product/Profile verified locally at `e667a08`, and E3
 ProductPlan/ScheduleVersion verified locally at `fcc9dda`; E4 Capture/Evidence
-verified locally at `1cc7f0c`
+verified locally at `1cc7f0c`; E5 Intake/Inventory verified locally at
+`14b0178`
 Authority: derives from `../prd/PRD.md` sections 15–16 and does not change scope
 Migration strategy: expand → backfill → compatibility → validate → later contract
-Last updated: 2026-09-25
+Last updated: 2026-09-26
 
 ## 1. Direct conclusion
 
@@ -23,8 +24,11 @@ facts and compatibility writes. E3 migration
 PlanStateInterval shadow facts, the occurrence identity contract, and
 compatibility writes. E4 migration `202609200003_r1_capture_evidence.sql` adds
 version-bound Capture/Job/Attempt/Evidence facts and atomic compatibility
-confirmation. Legacy reads remain authoritative; these migrations do not mean
-S1 or target-read cutover is complete.
+confirmation. E5 migration `202609200004_r1_intake_inventory.sql` enriches the
+existing Intake/Batch/Event/Allocation facts, adds the append-only intake state
+chain, and dual-writes exact allocation and compensation metadata. Legacy reads
+remain authoritative; these migrations do not mean S1 or target-read cutover is
+complete.
 
 ## 2. Naming and storage conventions
 
@@ -60,7 +64,7 @@ S1 or target-read cutover is complete.
 | `reminder_times[]` | `dose_slots.local_time` | Plan timing only; never infer reminder authorization |
 | No workspace timezone | `workspace_timezone_versions` v1 | `Etc/UTC`, `needs_confirmation`, `source=legacy_unspecified` |
 | `recognition_sets/files/jobs` | capture draft/slot versions/evidence/jobs | Each existing role becomes evidence version 1; late results remain version-bound |
-| Existing intake/batch/event rows | enriched facts and state chain | Preserve row IDs; add version/source/compensation metadata later |
+| Existing intake/batch/event rows | enriched facts and state chain | E5 preserves row IDs and backfills version/source/compensation metadata conservatively |
 | No command/outbox history | new platform spine | Do not invent ClientActions; later emit explicit migration snapshot changes |
 
 ## 4. Platform spine — implemented in S1-03
@@ -342,21 +346,60 @@ E3 Down succeeds only while all target rows remain migration-owned and no
 occurrence exists. Application ScheduleVersion/PlanStateInterval writes or any
 occurrence force SQLSTATE `55000` and a forward fix.
 
-## 8. Intake and inventory enrichment — later expand group
+## 8. Intake and inventory enrichment — E5 implemented locally
 
-- `intake_records` gains aggregate/action/version references, occurrence link,
-  occurred-at timezone snapshot, supersession chain, and immutable status facts.
-- `inventory_batches` gains aggregate version, lifecycle state, expiry raw value
-  and precision, currency, and source action/version fields.
-- `inventory_events` gains immutable source identity, normalized request/action,
-  posted-at time, and compensation reference with domain uniqueness.
-- `intake_allocations` gains allocation mode and as-allocated batch/profile
-  snapshots required for exact undo and later R2 cost interpretation.
+E5 expands the existing transaction model rather than replacing it. Legacy
+`intake_records.status`, `inventory_batches.current_quantity`, and existing API
+responses remain compatibility authorities until C1, while every current
+service write also supplies the target metadata in the same transaction.
 
-Cross-workspace Product/Batch/Intake/Allocation relationships must be prevented
-with composite keys or tenant-validating triggers, not only application checks.
-The allocation sum and event replay invariants are verified by transaction code
-and reconciliation SQL; deferred constraints may be introduced where practical.
+`intake_records` now carries aggregate version, optional ClientAction and
+occurrence references, normalized request hash, occurred-at/timezone snapshot,
+Product/Ingredient profile snapshots, supersession links, completeness, and
+source ownership. `intake_status_facts` appends the active/revoked state chain;
+the compatibility status column still changes during E5, so this is not yet the
+final immutable Intake read model.
+
+`inventory_batches` now carries aggregate version, lifecycle, management-unit
+snapshot, original received quantity/date, raw expiry precision, currency,
+optional command identity, source kind, and update time. The old
+`current_quantity <= initial_quantity` ceiling was replaced by a non-negative
+balance rule: an exact undo must not fail merely because later positive
+adjustment semantics can make a legal replay exceed the original receipt.
+
+`inventory_events` now records normalized ledger kind, stable source identity,
+request/action metadata, `posted_at`, actor, batch version before the event,
+`balance_after`, and an optional compensation reference. Source identity and
+compensation are unique. Direct event update is rejected; account/product
+cleanup can still cascade. Each undo event references the exact original
+intake event for the same allocation and batch.
+
+`intake_allocations` now stores tenant/product identity, allocation mode, the
+consumption event ID, batch version and balance before/after, unit snapshot, and
+IngredientProfileVersion. Composite foreign keys plus insert/update validation
+reject cross-tenant or cross-product relations. Core allocation facts cannot be
+mutated in place. Existing `unit_cost_cny` remains compatibility data only; E5
+does not create the R2 cost ledger or reinterpret a legacy zero price as free.
+
+`r1_backfill_intake_inventory_batch(size)` advances through batch, intake,
+event, and allocation phases with a durable cursor, attempt/source counts,
+source hash, and progress/completion timestamps. It is idempotent, restartable
+at committed phase batches, and catches N-1 writes without inventing a
+ClientAction or request hash. Migration-time rows are marked
+`legacy_migration`; N-1 and current-service writes remain distinguishable.
+
+The service now rejects reuse of one intake idempotency key with a different
+normalized request hash. FEFO writes record allocation/event snapshots, and
+undo restores the original batches and writes one compensation per original
+event. Local concurrency tests prove one side effect for eight identical
+intake retries and one compensation for eight concurrent undo retries. This is
+E5 transaction evidence, not completion of S7 correction/adjustment/result
+lookup APIs.
+
+E5 Down succeeds only for migration-owned target metadata. Any N-1 or current
+application write forces SQLSTATE `55000` and a forward fix. Deferred ownership
+constraints preserve parent account deletion while still rejecting an isolated
+batch/profile deletion that would orphan facts.
 
 ## 9. Risk and reminders — later expand group
 
@@ -380,7 +423,7 @@ or external delivery.
 | E2 | Product/profile/ingredient expand tables and nullable pointers | Old columns remain authoritative | Row counts, version mapping, unsupported-row quarantine |
 | E3 | Plan/timezone/occurrence expand tables | Old schedule reads remain | `VERIFIED_LOCAL` at `fcc9dda`; historical fixture, compatibility, timezone/DST and rollback guards pass |
 | E4 | Capture/evidence expand tables | Old recognition set remains | `VERIFIED_LOCAL` at `1cc7f0c`; version-bound jobs/attempts, replacement and late-result checks pass |
-| E5 | Intake/inventory metadata and constraints | Existing transactions remain | Q1–Q3 reconciliation and concurrency tests |
+| E5 | Intake/inventory metadata and constraints | Existing transactions remain | `VERIFIED_LOCAL` at `14b0178`; Q1 replay, Q2 compensation, scoped Q3 concurrency, N-1 catch-up and rollback guards pass |
 | E6 | Risk/reminder tables | Old summary remains until service switch | Revision/dedupe/retry evidence |
 | C1 | Dual-read comparison and service write cutover | Target facts become authoritative | Mismatch count zero for accepted cohort |
 | C2 | Validate `NOT NULL`/FK/exclusion constraints | N/N-1 client window retained | Lock time and compatibility evidence |
@@ -419,4 +462,4 @@ The platform spine is locally verified only when:
 5. invalid hashes/states/revisions are rejected by database constraints;
 6. `r1_source_inventory.sql` and `r1_reconciliation.sql` return zero critical
    violations on the fixture;
-7. status documents still say S1 is partial until E5–E6 finish.
+7. status documents still say S1 is partial until E6 finishes.

@@ -8,8 +8,9 @@ The R1 platform-spine migration at `d45dae5` and E2
 Product/Profile/Ingredient migration at standalone implementation commit
 `e667a08`, plus E3 ProductPlan/ScheduleVersion at `fcc9dda`, are locally
 verified on fresh and synthetic current snapshots. E4 Capture/Evidence at
-`1cc7f0c` is also locally verified. E5-E6, independent target capture APIs/H5,
-target-read cutover, and every production Gate are still open.
+`1cc7f0c` and E5 Intake/Inventory at `14b0178` are also locally verified. E6,
+independent target capture APIs/H5, complete S7 commands/UI, target-read
+cutover, and every production Gate are still open.
 The code is still a locally accepted H5 release candidate with the deterministic supplement loop, invitation identity, private
 three-image recognition boundary, Records/product/Me surfaces, account/file
 cleanup, production Compose/Caddy, health/metrics, encrypted backup/restore
@@ -78,10 +79,11 @@ standalone clone completed `make install`, `make check`, `make test`, and
 passed client, server, and integration E2E at main commit `04538ce`. The GitHub
 API reported the repository as public on 2026-09-20. The owner selected direct
 delivery on `r1-e2-product-profile`, with no PR and no `main` merge. The current
-workflow only runs for PRs or `main` pushes, so E2/E3/E4 evidence is local only:
+workflow only runs for PRs or `main` pushes, so E2–E5 evidence is local only:
 `reports/r1/2026-09-20-s1-product-profile/README.md` and
 `reports/r1/2026-09-20-s1-product-plan/README.md`, plus
-`reports/r1/2026-09-25-s1-capture-evidence/README.md`.
+`reports/r1/2026-09-25-s1-capture-evidence/README.md` and
+`reports/r1/2026-09-26-s1-intake-inventory/README.md`.
 
 ## Production path
 
@@ -160,6 +162,18 @@ workflow only runs for PRs or `main` pushes, so E2/E3/E4 evidence is local only:
 - E4 does not implement independent slot upload/replace/skip/manual APIs or H5
   state handling. Those remain S4/S5 work. E4 Down is forbidden after
   compatibility/target writes or replacement versions exist.
+- `r1_backfill_intake_inventory_batch` is the phased E5 catch-up path. Preserve
+  its batch/intake/event/allocation phases, source observation, N-1 catch-up,
+  and guarded Down boundary; do not replace it with an untracked bulk rewrite.
+- InventoryEvent is append-only. FEFO allocation stores the exact consumption
+  event and batch balance/version snapshots; undo must compensate that event in
+  the same batch and must never rerun current FEFO to guess a destination.
+- An intake idempotency key is valid only for the same normalized request hash.
+  Changed-payload reuse is `idempotency_conflict`. The legacy key is not a UUID
+  ClientAction; do not fabricate one. Full ClientAction/result lookup remains S7.
+- E5 does not implement the R2 cost ledger. `unit_cost_cny=0` and batch
+  `price_cny=0` remain unknown legacy semantics unless later evidence proves
+  free cost.
 - OTC/prescription rows remain quarantine-only and absent from ordinary APIs;
   do not add a placeholder management entry or medication-advice path.
 - `.github/workflows/ci.yml` is active in the standalone repository. Keep pnpm

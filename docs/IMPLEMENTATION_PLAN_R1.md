@@ -2,7 +2,7 @@
 
 Status: active implementation plan
 Contract: `../prd/PRD.md`
-Last updated: 2026-09-19
+Last updated: 2026-09-26
 
 ## 1. Outcome
 
@@ -135,13 +135,13 @@ representations.
 | Slice | Demonstrable result | Required evidence | Status |
 | --- | --- | --- | --- |
 | S0 | Active docs, owners, work IDs, CI path and evidence directories are clear | Document/link audit, RG0 checklist | In progress; standalone repository and hosted CI active, owner names and branch protection open |
-| S1 | Target expand migrations apply to empty DB and a current snapshot without destructive cutover | Migration report, counts, lock time, rollback point | In progress; platform spine through E4 Capture/Evidence verified locally; E5–E6 open |
+| S1 | Target expand migrations apply to empty DB and a current snapshot without destructive cutover | Migration report, counts, lock time, rollback point | In progress; platform spine through E5 Intake/Inventory verified locally; E6 open |
 | S2 | ClientAction/result lookup and DomainChange/outbox support one harmless write end to end | Contract + integration + duplicate/restart tests | Not started |
 | S3 | Identity/Demo/admin/deletion run on compatibility schema with target audit and authorization | Cross-tenant, step-up, deletion residue tests | Not started |
 | S4 | One independent capture slot can upload, process, be replaced, become stale, and fall back manually | File/job/evidence integration + H5 state test | Not started |
 | S5 | Three mixed slots merge into an editable multi-ingredient candidate and confirm atomically | Q5, conflict, late-result and rollback tests | Not started |
 | S6 | Product profile/state and plan versions produce correct occurrences across history/timezone | Property/integration/API/H5 tests | Not started |
-| S7 | Today/Records creates, corrects, revokes and safely retries facts with FEFO/exact restore | Q1–Q3, restart, concurrency and E2E | Not started |
+| S7 | Today/Records creates, corrects, revokes and safely retries facts with FEFO/exact restore | Q1–Q3, restart, concurrency and E2E | E5 data/compatibility foundation verified locally; correction, adjustment, ClientAction/result lookup, target API/read and H5 E2E remain open |
 | S8 | Risk projections and in-app reminders converge after plan/inventory/timezone changes | Projection revision, dedupe, retry and E2E | Not started |
 | S9 | R1 H5 visual system and all core states pass supported mobile/desktop accessibility review | Screenshot matrix, axe, keyboard, reader, real devices | Not started |
 | S10 | Production-like migration, dependencies, restore and canary use the same immutable digest | RG0–RG9 evidence pack | Not started |
@@ -155,7 +155,9 @@ expand/backfill/compatibility sub-slice only. E3 ProductPlan/ScheduleVersion
 evidence for implementation commit `fcc9dda` is recorded in
 `../reports/r1/2026-09-20-s1-product-plan/README.md`. E4 Capture/Evidence
 evidence for implementation commit `1cc7f0c` is recorded in
-`../reports/r1/2026-09-25-s1-capture-evidence/README.md`. E5-E6, scale rehearsal,
+`../reports/r1/2026-09-25-s1-capture-evidence/README.md`. E5 Intake/Inventory
+evidence for implementation commit `14b0178` is recorded in
+`../reports/r1/2026-09-26-s1-intake-inventory/README.md`. E6, scale rehearsal,
 target-read cutover, staging, and production evidence remain open.
 
 ## 8. Schema and migration deliverables

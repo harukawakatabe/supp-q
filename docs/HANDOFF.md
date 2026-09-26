@@ -8,9 +8,10 @@ The R1 platform-spine migration at `d45dae5` and E2
 Product/Profile/Ingredient migration at standalone implementation commit
 `e667a08`, plus E3 ProductPlan/ScheduleVersion at `fcc9dda`, are locally
 verified on fresh and synthetic current snapshots. E4 Capture/Evidence at
-`1cc7f0c` and E5 Intake/Inventory at `14b0178` are also locally verified. E6,
-independent target capture APIs/H5, complete S7 commands/UI, target-read
-cutover, and every production Gate are still open.
+`1cc7f0c`, E5 Intake/Inventory at `14b0178`, and E6 Risk/Reminder foundation at
+`0a54f1e` are also locally verified. Independent target capture APIs/H5,
+complete S7 commands/UI, the E6 materializer/API/UI, target-read cutover, and
+every production Gate are still open.
 The code is still a locally accepted H5 release candidate with the deterministic supplement loop, invitation identity, private
 three-image recognition boundary, Records/product/Me surfaces, account/file
 cleanup, production Compose/Caddy, health/metrics, encrypted backup/restore
@@ -79,11 +80,12 @@ standalone clone completed `make install`, `make check`, `make test`, and
 passed client, server, and integration E2E at main commit `04538ce`. The GitHub
 API reported the repository as public on 2026-09-20. The owner selected direct
 delivery on `r1-e2-product-profile`, with no PR and no `main` merge. The current
-workflow only runs for PRs or `main` pushes, so E2–E5 evidence is local only:
+workflow only runs for PRs or `main` pushes, so E2–E6 evidence is local only:
 `reports/r1/2026-09-20-s1-product-profile/README.md` and
 `reports/r1/2026-09-20-s1-product-plan/README.md`, plus
 `reports/r1/2026-09-25-s1-capture-evidence/README.md` and
-`reports/r1/2026-09-26-s1-intake-inventory/README.md`.
+`reports/r1/2026-09-26-s1-intake-inventory/README.md`, plus
+`reports/r1/2026-09-26-s1-risk-reminders/README.md`.
 
 ## Production path
 
@@ -104,7 +106,8 @@ workflow only runs for PRs or `main` pushes, so E2–E5 evidence is local only:
 ## Scope decisions
 
 - R1 is H5 only. WeChat upload/login/subscription work is R4.
-- In-app reminders ship; Web Push is deferred.
+- The R1 reminder target is in-app only; E6 has the persistence foundation but
+  not yet the materializer, event center, or settings UI. Web Push is deferred.
 - Product-level AI was removed from the Launch-Beta gate by D-021 and is now an
   R3 controlled supplement-information capability, not a hidden R1 feature.
 - Health-context fields remain absent until an R3/R4 shipped function has a

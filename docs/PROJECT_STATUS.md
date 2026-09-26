@@ -35,16 +35,16 @@ Confidence:
   branch-protection enforcement remain open.
 - Physical schema: `SCHEMA_R1.md`; the platform spine, E2
   Product/Profile/Ingredient, E3 ProductPlan/ScheduleVersion, and E4
-  Capture/Evidence plus E5 Intake/Inventory migrations are locally verified,
-  while E6 and target-read cutover remain open.
+  Capture/Evidence, E5 Intake/Inventory, and E6 Risk/Reminder foundation
+  migrations are locally verified, while target-read cutover remains open.
 - Release evidence: `R1_GATE_CHECKLIST.md`; RG0–RG4 are partial where noted and
   no production Gate is accepted for target R1.
 - UI direction: user-provided `DESIGN.md`, adapted through
   `DESIGN_IMPLEMENTATION_R1.md`.
 - No complete R1 vertical slice has been claimed; the S1 platform spine, E2
   Product/Profile/Ingredient, E3 ProductPlan/ScheduleVersion, and E4
-  Capture/Evidence plus E5 Intake/Inventory expand/backfill sub-slices have
-  `VERIFIED_LOCAL` evidence.
+  Capture/Evidence, E5 Intake/Inventory, and E6 Risk/Reminder expand/backfill
+  sub-slices have `VERIFIED_LOCAL` evidence.
 
 ## Shipped to production
 
@@ -63,18 +63,19 @@ or accepted recognition provider has been supplied.
   retry/manual fallback, saved OCR evidence, editable candidate, and explicit
   human-confirmation boundary.
 - Product basic/status editing, schedule versioning, weekly/day/long-cycle
-  rules, reminder times, restock thresholds, expiry settings, and new batches.
+  rules, plan times, restock thresholds, expiry settings, and new batches.
 - Scheduled/ad-hoc/backfilled intake records, notes, FEFO inventory deduction,
   exact repeat-safe undo, 30-day record list, projected finish/latest start,
   and low-stock/expiry risk.
-- In-app reminder summary. H5 Web Push remains deferred.
+- Existing Today risk/plan summaries; no target reminder event center or
+  settings UI is claimed. H5 Web Push remains deferred.
 - Account deletion UI and API: exact-email confirmation immediately invalidates
   all sessions; the worker deletes private objects first and then cascades
   registered account data, retrying failed cleanup jobs.
 
 ### Data, recognition, and tenancy
 
-- PostgreSQL migrations through `202609200004`. The R1 platform spine adds
+- PostgreSQL migrations through `202609200005`. The R1 platform spine adds
   workspace timezone versions, ClientAction, DomainChange, consumer receipts,
   projection revisions, and unsupported-product quarantine. E2 adds immutable
   ProductProfile/IngredientProfile versions, media/deletion support tables,
@@ -87,6 +88,10 @@ or accepted recognition provider has been supplied.
   E5 enriches Intake/Batch/Event/Allocation facts with versions, source and
   timezone/profile snapshots, per-event balance evidence, exact compensation,
   append-only intake status facts, and phased catch-up state.
+  E6 adds complete-revision inventory risk results, conservative
+  `needs_confirmation` ReminderPreferences, immutable preference/window
+  versions, Product mute overrides, in-app ReminderEvents/Targets, and
+  monotonic materialization cursors.
 - Fresh and synthetic Launch-Beta snapshot upgrades, resumable E2 catch-up,
   N-1 drift snapshots, compatibility paths, parent cleanup, pre-target-write
   rollback, and post-target-write rollback refusal pass for E2 implementation
@@ -94,19 +99,24 @@ or accepted recognition provider has been supplied.
 - Fresh/synthetic E3 upgrade, one-row resume, idempotent rerun, N-1 drift,
   quarantine, tenant/immutability/interval constraints, parent cascade,
   deterministic occurrence identity, and guarded Down pass for implementation
-  commit `fcc9dda`. This evidence remains E3-specific and does not prove E5-E6
-  or target-read cutover.
+  commit `fcc9dda`. This evidence remains E3-specific; later migrations have
+  their own evidence and target-read cutover is still open.
 - Fresh/synthetic E4 upgrade, idempotent and N-1 catch-up, partial-role mapping,
   target-owned image replacement without a legacy Job, attempt-reclaim and
   replaced-image late-result isolation, immutable evidence/candidates, active
   file protection, parent cleanup, SQL inventory/reconciliation execution, and
   guarded Down pass for implementation commit `1cc7f0c`. This does not mean
-  independent per-slot APIs/H5 states, E6, or target-read cutover exist.
+  independent per-slot APIs/H5 states or target-read cutover exist.
 - Fresh/synthetic E5 upgrade, phased cursor resume, idempotent rerun, N-1
   catch-up, tenant/immutability/source constraints, account cascade, read-only
   Q1/Q2 reconciliation, request-hash conflict, eight-way intake retry, eight-way
   undo retry, and guarded Down pass for implementation commit `14b0178`. This
   remains local/synthetic evidence and does not complete S7, RG2, or RG3.
+- Fresh/synthetic E6 upgrade, conservative N-1 Workspace catch-up, complete
+  revision activation/supersession, atomic preference versions, event dedupe,
+  lifecycle/cursor guards, parent cascade, reconciliation SQL, and guarded Down
+  pass for implementation commit `0a54f1e`. This remains local/synthetic
+  evidence and does not complete S8, C1, RG2, or RG3.
 - Product create/update and recognition confirmation dual-write E2 profiles and
   E3 plan facts transactionally while legacy reads remain authoritative.
   Metadata-only/repeated plan updates do not create target schedule versions;
@@ -245,8 +255,9 @@ release candidate**, not **online production**.
 
 - Remaining R1 occurrence materialization/service cutover, independent per-slot
   capture APIs/H5 replace-skip-manual flow, full intake correction/supersession,
-  inventory adjustment/void and ClientAction result APIs, risk/reminder schema
-  and projections, target-read cutover, target UI and release gates.
+  inventory adjustment/void and ClientAction result APIs, risk/reminder
+  materialization and APIs, target-read cutover, reminder center/settings,
+  target UI and release gates.
 - R2 cost ledger, ingredient understanding/calendar, exports, and manual notes.
 - R3 controlled supplement AI and purpose-bound minimum health context.
 - R4 external notifications, WeChat login/upload and mini-program UI.

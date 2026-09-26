@@ -135,14 +135,14 @@ representations.
 | Slice | Demonstrable result | Required evidence | Status |
 | --- | --- | --- | --- |
 | S0 | Active docs, owners, work IDs, CI path and evidence directories are clear | Document/link audit, RG0 checklist | In progress; standalone repository and hosted CI active, owner names and branch protection open |
-| S1 | Target expand migrations apply to empty DB and a current snapshot without destructive cutover | Migration report, counts, lock time, rollback point | In progress; platform spine through E5 Intake/Inventory verified locally; E6 open |
+| S1 | Target expand migrations apply to empty DB and a current snapshot without destructive cutover | Migration report, counts, lock time, rollback point | Expand phase E1–E6 verified locally; C1 target-read comparison/cutover remains open |
 | S2 | ClientAction/result lookup and DomainChange/outbox support one harmless write end to end | Contract + integration + duplicate/restart tests | Not started |
 | S3 | Identity/Demo/admin/deletion run on compatibility schema with target audit and authorization | Cross-tenant, step-up, deletion residue tests | Not started |
 | S4 | One independent capture slot can upload, process, be replaced, become stale, and fall back manually | File/job/evidence integration + H5 state test | Not started |
 | S5 | Three mixed slots merge into an editable multi-ingredient candidate and confirm atomically | Q5, conflict, late-result and rollback tests | Not started |
 | S6 | Product profile/state and plan versions produce correct occurrences across history/timezone | Property/integration/API/H5 tests | Not started |
 | S7 | Today/Records creates, corrects, revokes and safely retries facts with FEFO/exact restore | Q1–Q3, restart, concurrency and E2E | E5 data/compatibility foundation verified locally; correction, adjustment, ClientAction/result lookup, target API/read and H5 E2E remain open |
-| S8 | Risk projections and in-app reminders converge after plan/inventory/timezone changes | Projection revision, dedupe, retry and E2E | Not started |
+| S8 | Risk projections and in-app reminders converge after plan/inventory/timezone changes | Projection revision, dedupe, retry and E2E | E6 data/evaluator foundation verified locally; materializer, API/read cutover, center/settings UI and H5 E2E remain open |
 | S9 | R1 H5 visual system and all core states pass supported mobile/desktop accessibility review | Screenshot matrix, axe, keyboard, reader, real devices | Not started |
 | S10 | Production-like migration, dependencies, restore and canary use the same immutable digest | RG0–RG9 evidence pack | Not started |
 
@@ -157,7 +157,9 @@ evidence for implementation commit `fcc9dda` is recorded in
 evidence for implementation commit `1cc7f0c` is recorded in
 `../reports/r1/2026-09-25-s1-capture-evidence/README.md`. E5 Intake/Inventory
 evidence for implementation commit `14b0178` is recorded in
-`../reports/r1/2026-09-26-s1-intake-inventory/README.md`. E6, scale rehearsal,
+`../reports/r1/2026-09-26-s1-intake-inventory/README.md`. E6 Risk/Reminder
+foundation evidence for implementation commit `0a54f1e` is recorded in
+`../reports/r1/2026-09-26-s1-risk-reminders/README.md`. Scale rehearsal,
 target-read cutover, staging, and production evidence remain open.
 
 ## 8. Schema and migration deliverables

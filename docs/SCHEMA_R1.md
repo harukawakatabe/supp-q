@@ -4,7 +4,7 @@ Status: draft implementation specification; platform spine verified locally at
 `d45dae5`, E2 Product/Profile verified locally at `e667a08`, and E3
 ProductPlan/ScheduleVersion verified locally at `fcc9dda`; E4 Capture/Evidence
 verified locally at `1cc7f0c`; E5 Intake/Inventory verified locally at
-`14b0178`
+`14b0178`; E6 Risk/Reminder foundation verified locally at `0a54f1e`
 Authority: derives from `../prd/PRD.md` sections 15–16 and does not change scope
 Migration strategy: expand → backfill → compatibility → validate → later contract
 Last updated: 2026-09-26
@@ -26,9 +26,11 @@ compatibility writes. E4 migration `202609200003_r1_capture_evidence.sql` adds
 version-bound Capture/Job/Attempt/Evidence facts and atomic compatibility
 confirmation. E5 migration `202609200004_r1_intake_inventory.sql` enriches the
 existing Intake/Batch/Event/Allocation facts, adds the append-only intake state
-chain, and dual-writes exact allocation and compensation metadata. Legacy reads
-remain authoritative; these migrations do not mean S1 or target-read cutover is
-complete.
+chain, and dual-writes exact allocation and compensation metadata. E6 migration
+`202609200005_r1_risk_reminders.sql` adds complete-revision risk storage,
+explicit reminder consent/version facts, in-app event lifecycle, targets, and
+monotonic compensation cursors. Legacy reads remain authoritative; these
+migrations do not mean S1 or target-read cutover is complete.
 
 ## 2. Naming and storage conventions
 
@@ -401,7 +403,7 @@ application write forces SQLSTATE `55000` and a forward fix. Deferred ownership
 constraints preserve parent account deletion while still rejecting an isolated
 batch/profile deletion that would orphan facts.
 
-## 9. Risk and reminders — later expand group
+## 9. Risk and reminders — E6 implemented locally
 
 | Table | Role | Required constraints |
 | --- | --- | --- |
@@ -415,6 +417,68 @@ batch/profile deletion that would orphan facts.
 R1 has in-app availability only. No row or UI state may claim Web Push, WeChat,
 or external delivery.
 
+### 9.1 Deterministic risk projection contract
+
+`projection_revisions` remains the revision authority.
+`inventory_risk_projection_sets` binds one building revision to one Product and
+records the expected number of batch results. `inventory_risk_projections`
+contains exactly one product result plus the declared batch results. The
+activation guard rejects an incomplete set; `r1_activate_inventory_risk_revision`
+serializes the Product scope, supersedes the previous active revision, and
+activates the complete replacement in one transaction.
+
+Product rows store stock/risk/calculation states, coverage counts, quantities,
+and optional first-shortfall facts. Batch rows store expiry precision/range,
+precision limitation, projected remainder, and an optional episode ID. Result
+insertion is allowed only while the matching `inventory_risk` Product revision
+is `building`. The active revision is replaced as a whole, not patched in place.
+
+The new `internal/risk` evaluator is a target-domain component and is not yet
+the API read authority. It applies stable FEFO ordering, excludes already
+expired batches from automatic allocation, keeps unknown expiry last, simulates
+future occurrences, separates stock and expiry risk, and preserves month/year
+range precision. The legacy summary remains authoritative until C1 comparison
+and service cutover.
+
+### 9.2 Reminder consent and lifecycle contract
+
+Every migrated Workspace gets one `reminder_preferences` aggregate in
+`needs_confirmation` with version `0` and no current preference version. Legacy
+`reminder_times[]`, risk thresholds, and existing UI summaries create no
+authorization, events, targets, or unread state. The compatibility backfill can
+add the same conservative row for an N-1-created Workspace.
+
+`r1_set_reminder_preference` locks the aggregate, checks the expected version,
+closes the prior immutable version, writes a new in-app-only version and all
+four window facts, then advances the current pointer atomically. Supported
+channel facts are fixed to `in_app + not_required`. There are no Web Push,
+WeChat, email, SMS, token, provider-attempt, or external-delivery claims in E6.
+
+`product_reminder_overrides` permits only `inherit` or `muted` for plan,
+inventory, and expiry categories. It has no `force_on`, so a Product cannot
+override a globally disabled preference.
+
+`reminder_events` has a Workspace-unique dedupe key, immutable source/policy
+identity and snapshots, independent `read_at`, and guarded lifecycle
+transitions. `reminder_targets` binds an occurrence, Product, or batch to the
+same tenant and keeps target resolution explicit. A reminder never becomes the
+authority for an occurrence, intake, stock balance, or risk result.
+
+`reminder_materialization_cursors` partitions replay by policy and plan/risk
+source. Every update must increment cursor version exactly once and cannot move
+the `(last_processed_at,last_event_id)` position backwards. E6 proves the
+storage/recovery contract; it does not yet ship the Worker/request-time
+materializer, reminder APIs, unread center, settings UI, or H5 E2E.
+
+### 9.3 Rollback and compatibility boundary
+
+Migration-only `needs_confirmation` aggregates may be rolled back. Down refuses
+with SQLSTATE `55000` after any confirmed/disabled preference, preference
+version, override, event, target, cursor, risk revision, or risk result exists.
+Parent User/Workspace deletion still cascades through E6 facts. Existing
+Product/Today risk summaries and schedule reads stay authoritative throughout
+E6.
+
 ## 10. Migration sequence
 
 | Step | Operation | Old application behavior | Gate evidence |
@@ -424,7 +488,7 @@ or external delivery.
 | E3 | Plan/timezone/occurrence expand tables | Old schedule reads remain | `VERIFIED_LOCAL` at `fcc9dda`; historical fixture, compatibility, timezone/DST and rollback guards pass |
 | E4 | Capture/evidence expand tables | Old recognition set remains | `VERIFIED_LOCAL` at `1cc7f0c`; version-bound jobs/attempts, replacement and late-result checks pass |
 | E5 | Intake/inventory metadata and constraints | Existing transactions remain | `VERIFIED_LOCAL` at `14b0178`; Q1 replay, Q2 compensation, scoped Q3 concurrency, N-1 catch-up and rollback guards pass |
-| E6 | Risk/reminder tables | Old summary remains until service switch | Revision/dedupe/retry evidence |
+| E6 | Risk/reminder tables | Old summary remains until service switch | `VERIFIED_LOCAL` at `0a54f1e`; complete activation, consent separation, dedupe, cursor recovery, cascade and rollback guards pass |
 | C1 | Dual-read comparison and service write cutover | Target facts become authoritative | Mismatch count zero for accepted cohort |
 | C2 | Validate `NOT NULL`/FK/exclusion constraints | N/N-1 client window retained | Lock time and compatibility evidence |
 | D1 | Remove obsolete columns/tables | Later release only | Explicit contract migration and rollback boundary |
@@ -462,4 +526,5 @@ The platform spine is locally verified only when:
 5. invalid hashes/states/revisions are rejected by database constraints;
 6. `r1_source_inventory.sql` and `r1_reconciliation.sql` return zero critical
    violations on the fixture;
-7. status documents still say S1 is partial until E6 finishes.
+7. status documents keep C1, remaining service/UI slices, RG2, staging, and
+   production explicitly open after the E1–E6 expand phase.

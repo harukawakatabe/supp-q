@@ -21,8 +21,8 @@ and a stable evidence location.
 | Gate | Current status | Why |
 | --- | --- | --- |
 | RG0 Contract ready | `PARTIAL` | PRD is confirmed; named owners and target physical schema/OpenAPI/error/migration specifications remain open |
-| RG1 Repeatable build | `PARTIAL` | Main baseline hosted CI and E2–E5 local checks pass; the owner selected no PR, the development branch has no hosted run, and enforceable branch rules/scans/promotion evidence remain open |
-| RG2 Migration safe | `PARTIAL` | Platform spine through E5 Intake/Inventory pass local fresh/synthetic-current/restart/rollback guards; E6, scale/lock and production-like evidence remain open |
+| RG1 Repeatable build | `PARTIAL` | Main baseline hosted CI and E2–E6 local checks pass; the owner selected no PR, the development branch has no hosted run, and enforceable branch rules/scans/promotion evidence remain open |
+| RG2 Migration safe | `PARTIAL` | Platform spine through E6 Risk/Reminder pass local fresh/synthetic-current/restart/rollback guards; scale/lock, C1 and production-like evidence remain open |
 | RG3 Domain/security correct | `PARTIAL` | E5 locally verifies replay, exact compensation and intake retry concurrency on synthetic data; complete S7 and R1-applicable Q1–Q9 coverage do not exist |
 | RG4 H5 experience | `PARTIAL` | Current Chromium Launch-Beta path exists; target IA/design/accessibility/browser matrix does not |
 | RG5 Performance/resilience | `OPEN` | Target load, SLO, failure injection, alert and recovery evidence is absent |
@@ -56,7 +56,7 @@ commit `04538ce`, retaining artifact digest
 `sha256:25db16dbc8743ad7126889e7faef39cd3447e37b6c286e428d82a1b9af0519c7`.
 The GitHub API reported the repository as public on 2026-09-20. The owner chose
 direct development-branch delivery without a PR and without changing `main`.
-The workflow runs on PRs and pushes to `main`, so the current E2–E5 branch has
+The workflow runs on PRs and pushes to `main`, so the current E2–E6 branch has
 local evidence only. No branch-protection or ruleset enforcement claim is made.
 
 - [ ] CI runs from the actual repository root with branch protection.
@@ -70,20 +70,20 @@ Pass owner: Engineering + QA.
 
 ## RG2 — Migration safe
 
-- [x] Empty database `up` succeeds through platform spine, E2 Product/Profile, E3 ProductPlan/ScheduleVersion, E4 Capture/Evidence, and E5 Intake/Inventory.
-- [x] A representative synthetic current Launch-Beta snapshot upgrades through E5 without reset.
+- [x] Empty database `up` succeeds through platform spine, E2 Product/Profile, E3 ProductPlan/ScheduleVersion, E4 Capture/Evidence, E5 Intake/Inventory, and E6 Risk/Reminder.
+- [x] A representative synthetic current Launch-Beta snapshot upgrades through E6 without reset.
 - [x] Source inventory includes state/type/timezone/price/job/file and plan-slot/history anomalies.
 - [x] E2 Product/Profile backfill is cursor-based, batched, idempotent, restartable between committed batches, and exposes cycle/count/timestamps.
 - [x] E3 ProductPlan backfill is cursor-based, batched, idempotent, pausable/resumable between committed batches, and exposes attempts/counts/hash/timestamps.
 - [x] E4 Capture backfill is cursor-based, idempotent, resumable at committed set boundaries, catches N-1 sets, and exposes attempts/counts/hash/timestamps.
 - [x] E5 Intake/Inventory catch-up is phased, cursor-based, idempotent, restartable, catches an N-1 write, and exposes attempts/source/hash/progress timestamps.
-- [ ] E6 risk/reminder backfills provide the required cursor/restart/observation contract.
+- [x] E6 conservatively catches N-1 Workspaces, preserves unconfirmed consent, and provides complete-revision and monotonic replay-cursor contracts; the S8 materializer remains open.
 - [ ] Lock targets and the ≤15-minute final-delta window pass rehearsal.
 - [x] E2 Product/Profile/Ingredient/batch counts, raw-field drift, tenant links and interval invariants reconcile locally.
 - [x] E3 plan/slot/state/timezone/occurrence identity reconciliation passes locally.
 - [x] E4 capture/slot/job/attempt/evidence/candidate/link reconciliation executes locally with no fixture violation.
 - [x] E5 intake/inventory replay, event snapshot, allocation, tenant, state-chain, and compensation reconciliation passes locally.
-- [ ] E6 risk/reminder reconciliation passes.
+- [x] E6 risk/reminder consent, revision, tenant, dedupe, channel, target, and cursor reconciliation executes locally.
 - [x] OTC/prescription fixture rows are quarantined and individually accounted for.
 - [x] Existing identity/catalog/recognition paths, cleanup with Products, pre-target-write Down, and post-target-write Down refusal pass locally.
 - [ ] Production-like backup/restore point, old deployed binary compatibility, and real snapshot reconciliation are proven.
@@ -93,11 +93,13 @@ Current evidence: platform commit `d45dae5`, E2 implementation commit
 `e667a08`, E3 implementation commit `fcc9dda`,
 E4 implementation commit `1cc7f0c`,
 E5 implementation commit `14b0178`,
+E6 implementation commit `0a54f1e`,
 `../reports/r1/2026-09-19-s1-platform-spine/README.md`,
 `../reports/r1/2026-09-20-s1-product-profile/README.md`,
 `../reports/r1/2026-09-20-s1-product-plan/README.md`, and
 `../reports/r1/2026-09-25-s1-capture-evidence/README.md`, and
-`../reports/r1/2026-09-26-s1-intake-inventory/README.md`. All checked items above
+`../reports/r1/2026-09-26-s1-intake-inventory/README.md`, and
+`../reports/r1/2026-09-26-s1-risk-reminders/README.md`. All checked items above
 are local/synthetic evidence, not hosted branch, staging, or production
 acceptance.
 

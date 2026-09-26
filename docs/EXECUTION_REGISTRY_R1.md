@@ -74,7 +74,7 @@ Gate acceptance and all production promotion.
 | S1-06 | E3 ProductPlan/ScheduleVersion/DoseSlot/PlanStateInterval expand, backfill, evaluator, reconciliation, compatibility writes | `VERIFIED_LOCAL` | Implementation `fcc9dda`; evidence in `../reports/r1/2026-09-20-s1-product-plan/README.md`; old schedule reads remain authoritative |
 | S1-07 | E4 Capture/SlotVersion/RecognitionJob/Attempt/Evidence/Candidate expand, backfill, reconciliation, compatibility writes | `VERIFIED_LOCAL` | Implementation `1cc7f0c`; evidence in `../reports/r1/2026-09-25-s1-capture-evidence/README.md`; old recognition reads remain authoritative |
 | S1-08 | E5 Intake/Batch/Event/Allocation expand, catch-up, reconciliation, compatibility writes | `VERIFIED_LOCAL` | Implementation `14b0178`; evidence in `../reports/r1/2026-09-26-s1-intake-inventory/README.md`; legacy reads remain authoritative and full S7 is open |
-| S1-09 | E6 risk/reminder expand group | `NOT_STARTED` | Continue only from the verified E5 boundary; revision/dedupe/retry evidence required |
+| S1-09 | E6 risk/reminder expand group | `VERIFIED_LOCAL` | Implementation `0a54f1e`; evidence in `../reports/r1/2026-09-26-s1-risk-reminders/README.md`; old risk summary remains authoritative and S8 is open |
 
 State vocabulary:
 
@@ -110,9 +110,11 @@ platform spine VERIFIED_LOCAL at d45dae5
 → E3 ProductPlan/ScheduleVersion VERIFIED_LOCAL at fcc9dda
 → E4 Capture/Evidence VERIFIED_LOCAL at 1cc7f0c
 → E5 Intake/Inventory VERIFIED_LOCAL at 14b0178
+→ E6 Risk/Reminder foundation VERIFIED_LOCAL at 0a54f1e
 → push the owner-selected development branch without PR or main merge
-→ continue E6 only after E5 evidence remains green
+→ continue C1 shadow comparison and unfinished S2–S8 service/UI slices
 ```
 
-Do not claim S1 complete when only the platform spine passes. S1 closes only
-after all required R1 expand/backfill migrations and reconciliation checks pass.
+The E1–E6 expand phase is locally verified. Do not claim target-read cutover,
+S8, RG2, staging, or production from that evidence; C1 comparison and the
+remaining service/UI/recovery slices still have separate gates.

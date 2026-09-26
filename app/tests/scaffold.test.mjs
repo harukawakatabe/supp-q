@@ -64,6 +64,17 @@ test("V1 records, product maintenance, and account deletion paths call real APIs
   assert.match(api, /\/account/);
 });
 
+test("legacy schedule times are not presented as notification authorization", async () => {
+  const add = await readFile(new URL("../src/pages/product/add.vue", import.meta.url), "utf8");
+  const detail = await readFile(new URL("../src/pages/product/detail.vue", import.meta.url), "utf8");
+  const me = await readFile(new URL("../src/pages/me/index.vue", import.meta.url), "utf8");
+  assert.match(add, /计划时点/);
+  assert.match(detail, /计划时点/);
+  assert.match(me, /不是通知授权/);
+  assert.match(me, /站内提醒设置与事件中心尚未开放/);
+  assert.doesNotMatch(detail, /应用内提醒时间/);
+});
+
 test("semantic layout elements use border-box sizing", async () => {
   const app = await readFile(new URL("../src/App.vue", import.meta.url), "utf8");
   for (const element of ["main", "section", "nav"]) {

@@ -695,4 +695,122 @@ SELECT cycle_state,phase,attempt_count,processed_count,source_count,
 FROM r1_intake_inventory_backfill_state
 WHERE singleton;
 
+SELECT count(*) AS reminder_preference_workspace_coverage_violations
+FROM workspaces workspace
+LEFT JOIN reminder_preferences preference ON preference.workspace_id=workspace.id
+WHERE preference.id IS NULL
+   OR preference.user_id<>workspace.owner_user_id;
+
+SELECT count(*) AS unconfirmed_reminder_authorization_violations
+FROM reminder_preferences preference
+WHERE preference.configuration_state='needs_confirmation'
+  AND (preference.aggregate_version<>0
+       OR preference.current_version_id IS NOT NULL
+       OR EXISTS (
+           SELECT 1 FROM reminder_preference_versions version
+           WHERE version.reminder_preference_id=preference.id
+       ));
+
+SELECT count(*) AS current_reminder_preference_binding_violations
+FROM reminder_preferences preference
+LEFT JOIN reminder_preference_versions version
+  ON version.id=preference.current_version_id
+ AND version.reminder_preference_id=preference.id
+ AND version.user_id=preference.user_id
+ AND version.workspace_id=preference.workspace_id
+ AND version.effective_to IS NULL
+WHERE preference.configuration_state IN ('configured','disabled')
+  AND (version.id IS NULL OR version.business_version<>preference.aggregate_version);
+
+SELECT count(*) AS current_reminder_window_set_violations
+FROM reminder_preferences preference
+JOIN reminder_preference_versions version ON version.id=preference.current_version_id
+LEFT JOIN reminder_window_preferences window_pref
+  ON window_pref.reminder_preference_version_id=version.id
+GROUP BY preference.id
+HAVING count(window_pref.window_name)<>4 OR count(DISTINCT window_pref.window_name)<>4;
+
+SELECT count(*) AS active_inventory_risk_revision_completeness_violations
+FROM projection_revisions revision
+LEFT JOIN inventory_risk_projection_sets set_manifest
+  ON set_manifest.projection_revision_id=revision.id
+LEFT JOIN LATERAL (
+    SELECT count(*) FILTER (WHERE result_scope='product') AS product_rows,
+           count(*) FILTER (WHERE result_scope='batch') AS batch_rows
+    FROM inventory_risk_projections result
+    WHERE result.projection_revision_id=revision.id
+) result_count ON true
+WHERE revision.projection_type='inventory_risk'
+  AND revision.projection_state='active'
+  AND (set_manifest.completed_at IS NULL
+       OR result_count.product_rows<>1
+       OR result_count.batch_rows<>set_manifest.expected_batch_count);
+
+SELECT count(*) AS inventory_risk_binding_violations
+FROM inventory_risk_projections result
+LEFT JOIN inventory_risk_projection_sets set_manifest
+  ON set_manifest.projection_revision_id=result.projection_revision_id
+ AND set_manifest.user_id=result.user_id
+ AND set_manifest.workspace_id=result.workspace_id
+ AND set_manifest.product_id=result.product_id
+LEFT JOIN inventory_batches batch
+  ON batch.id=result.batch_id
+ AND batch.user_id=result.user_id
+ AND batch.workspace_id=result.workspace_id
+ AND batch.product_id=result.product_id
+WHERE set_manifest.projection_revision_id IS NULL
+   OR (result.result_scope='batch' AND batch.id IS NULL);
+
+SELECT count(*) AS reminder_event_dedupe_violations
+FROM (
+    SELECT workspace_id,dedupe_key
+    FROM reminder_events
+    GROUP BY workspace_id,dedupe_key
+    HAVING count(*)<>1
+) duplicate_event;
+
+SELECT count(*) AS external_delivery_claim_violations
+FROM reminder_preference_versions version
+FULL JOIN reminder_events event ON false
+WHERE version.channel<>'in_app'
+   OR version.channel_authorization<>'not_required'
+   OR event.channel<>'in_app';
+
+SELECT count(*) AS reminder_event_preference_binding_violations
+FROM reminder_events event
+LEFT JOIN reminder_preference_versions version
+  ON version.id=event.reminder_preference_version_id
+ AND version.reminder_preference_id=event.reminder_preference_id
+ AND version.user_id=event.user_id
+ AND version.workspace_id=event.workspace_id
+WHERE version.id IS NULL;
+
+SELECT count(*) AS reminder_target_binding_violations
+FROM reminder_targets target
+LEFT JOIN reminder_events event
+  ON event.id=target.event_id
+ AND event.user_id=target.user_id
+ AND event.workspace_id=target.workspace_id
+LEFT JOIN products product
+  ON product.id=target.product_id
+ AND product.user_id=target.user_id
+ AND product.workspace_id=target.workspace_id
+LEFT JOIN scheduled_occurrences occurrence
+  ON occurrence.id=target.occurrence_id
+ AND occurrence.user_id=target.user_id
+ AND occurrence.workspace_id=target.workspace_id
+ AND occurrence.product_id=target.product_id
+LEFT JOIN inventory_batches batch
+  ON batch.id=target.batch_id
+ AND batch.user_id=target.user_id
+ AND batch.workspace_id=target.workspace_id
+ AND batch.product_id=target.product_id
+WHERE event.id IS NULL OR product.id IS NULL
+   OR (target.target_kind='occurrence' AND occurrence.id IS NULL)
+   OR (target.target_kind='batch' AND batch.id IS NULL);
+
+SELECT count(*) AS reminder_cursor_pair_violations
+FROM reminder_materialization_cursors cursor
+WHERE (cursor.last_processed_at IS NULL)<>(cursor.last_event_id IS NULL);
+
 COMMIT;

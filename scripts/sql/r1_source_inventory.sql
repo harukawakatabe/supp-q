@@ -316,4 +316,41 @@ SELECT cycle_state,phase,attempt_count,processed_count,source_count,
 FROM r1_intake_inventory_backfill_state
 WHERE singleton;
 
+SELECT required.table_name,
+       to_regclass(current_schema() || '.' || required.table_name) IS NOT NULL AS present
+FROM (VALUES
+    ('inventory_risk_projection_sets'),
+    ('inventory_risk_projections'),
+    ('reminder_preferences'),
+    ('reminder_preference_versions'),
+    ('reminder_window_preferences'),
+    ('product_reminder_overrides'),
+    ('reminder_events'),
+    ('reminder_targets'),
+    ('reminder_materialization_cursors')
+) AS required(table_name)
+ORDER BY required.table_name;
+
+SELECT configuration_state,count(*) AS workspace_count
+FROM reminder_preferences
+GROUP BY configuration_state
+ORDER BY configuration_state;
+
+SELECT 'inventory_risk_projection_sets' AS entity,count(*) AS row_count
+FROM inventory_risk_projection_sets
+UNION ALL SELECT 'inventory_risk_projections',count(*) FROM inventory_risk_projections
+UNION ALL SELECT 'reminder_preference_versions',count(*) FROM reminder_preference_versions
+UNION ALL SELECT 'reminder_window_preferences',count(*) FROM reminder_window_preferences
+UNION ALL SELECT 'product_reminder_overrides',count(*) FROM product_reminder_overrides
+UNION ALL SELECT 'reminder_events',count(*) FROM reminder_events
+UNION ALL SELECT 'reminder_targets',count(*) FROM reminder_targets
+UNION ALL SELECT 'reminder_materialization_cursors',count(*) FROM reminder_materialization_cursors
+ORDER BY entity;
+
+SELECT count(*) AS migrated_preferences_that_imply_authorization
+FROM reminder_preferences preference
+WHERE preference.configuration_state<>'needs_confirmation'
+   OR preference.aggregate_version<>0
+   OR preference.current_version_id IS NOT NULL;
+
 COMMIT;

@@ -326,18 +326,18 @@ func normalizeCreate(input CreateProductInput, now time.Time) (CreateProductInpu
 		return input, core.Schedule{}, NewError("invalid_schedule", "停用周数不能为负数。")
 	}
 	if len(input.Schedule.ReminderTimes) > 8 {
-		return input, core.Schedule{}, NewError("invalid_schedule", "提醒时间不能超过 8 个。")
+		return input, core.Schedule{}, NewError("invalid_schedule", "计划时点不能超过 8 个。")
 	}
 	if len(input.Schedule.ReminderTimes) != input.DoseTimesPerDay {
-		return input, core.Schedule{}, NewError("invalid_schedule", "提醒时间数量必须与每日次数一致。")
+		return input, core.Schedule{}, NewError("invalid_schedule", "计划时点数量必须与每日次数一致。")
 	}
 	seenReminderTimes := make(map[string]struct{}, len(input.Schedule.ReminderTimes))
 	for _, value := range input.Schedule.ReminderTimes {
 		if !reminderPattern.MatchString(value) {
-			return input, core.Schedule{}, NewError("invalid_schedule", "提醒时间必须使用 HH:MM。")
+			return input, core.Schedule{}, NewError("invalid_schedule", "计划时点必须使用 HH:MM。")
 		}
 		if _, exists := seenReminderTimes[value]; exists {
-			return input, core.Schedule{}, NewError("invalid_schedule", "提醒时间不能重复。")
+			return input, core.Schedule{}, NewError("invalid_schedule", "计划时点不能重复。")
 		}
 		seenReminderTimes[value] = struct{}{}
 	}
